@@ -101,6 +101,11 @@ class Config:
     # block_size covers far more text. char is the default for transparency.
     tokenizer: str = "char"
     bpe_vocab_size: int = 1024          # target vocab size when tokenizer == "bpe"
+    # bpe.py is the naive minbpe algorithm — O(corpus x merges) in pure Python — so training it on
+    # a 20M+ char corpus is painfully slow. Like real tokenizers (GPT-2's BPE was NOT trained on
+    # all of WebText), we LEARN the merges from a representative sample of this many chars, then
+    # apply them to the whole corpus. Raise it for slightly better merges at the cost of time.
+    bpe_train_chars: int = 1_000_000
     # Where the raw training text comes from. Swap this (and data_path) to train on something
     # else. Currently: TinyStories (valid split, ~22MB) — simple synthetic kids' stories that
     # a tiny model can actually learn to write coherently. The original Tiny Shakespeare lives
@@ -171,10 +176,11 @@ def medium() -> Config:
         dtype="bfloat16",                                # half-precision weights -> fits in memory
         use_grad_checkpoint=True,                        # recompute activations -> fits in memory
         use_qk_norm=True,                                # stability matters more at this scale
+        tokenizer="bpe", bpe_vocab_size=2048,            # subwords: real tokens + far more context
         batch_size=32,                                   # bigger model -> smaller batch to fit
         max_iters=20000, warmup_iters=400,               # more steps for the larger capacity
     )
 
 
-# A single shared instance the other files import. Swap to `medium()` to train the big version.
-config = Config()
+# A single shared instance the other files import. Swap to `Config()` for the small default.
+config = medium()

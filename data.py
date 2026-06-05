@@ -113,7 +113,10 @@ def build_tokenizer(text: str):
         return CharTokenizer(text)
     if config.tokenizer == "bpe":
         from bpe import BPETokenizer                       # imported lazily; char path needs nothing
-        return BPETokenizer().train(text, config.bpe_vocab_size)
+        # Learn merges from a sample (config.bpe_train_chars) — the naive BPE is too slow to train
+        # on a 20M+ char corpus, and a sample's subword statistics generalize fine to the whole.
+        sample = text[: config.bpe_train_chars]
+        return BPETokenizer().train(sample, config.bpe_vocab_size)
     raise ValueError(f"unknown tokenizer {config.tokenizer!r} (use 'char' or 'bpe')")
 
 
