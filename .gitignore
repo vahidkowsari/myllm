@@ -5,6 +5,8 @@ shakespeare.txt
 ckpt.pt
 ckpt.npz
 ckpt.json
+ckpt_sft.npz
+ckpt_sft.json
 
 # downloadable training corpus (re-fetched by data.py)
 tinystories.txt

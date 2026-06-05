@@ -428,7 +428,8 @@ class GPT(nn.Module):
           4. (optional) top_k and/or top_p filtering, then sample one token
           5. append it and repeat
         If `on_token` is given it is called with each new token id as it is produced, so a
-        caller can stream output live (sample.py's -i mode uses this).
+        caller can stream output live (sample.py's -i mode uses this). If `on_token` returns a
+        truthy value, generation stops early — used by chat mode to halt at a stop marker.
 
         The KV cache is the speed trick: each block remembers its past Keys/Values, so a new
         token is one forward pass over a *single* token (O(T) instead of O(T^2)). We rebuild
@@ -460,6 +461,6 @@ class GPT(nn.Module):
 
             idx = mx.concatenate([idx, next_id], axis=1)
             mx.eval(idx)
-            if on_token is not None:
-                on_token(int(next_id[0, 0]))
+            if on_token is not None and on_token(int(next_id[0, 0])):
+                break                                      # callback asked to stop (e.g. EOT)
         return idx

@@ -22,6 +22,7 @@ import mlx.core as mx
 from config import Config
 from data import load_tokenizer
 from model import GPT
+from sft import PROMPT_TEMPLATE, EOT      # instruction template + stop marker, for --chat mode
 
 
 def load_model(ckpt_path: str, meta_path: str):
@@ -38,25 +39,62 @@ def load_model(ckpt_path: str, meta_path: str):
     return model, tokenizer.encode, tokenizer.decode
 
 
-def stream_generate(model, idx, n: int, decode, on_char, **gen_kwargs):
+class StopStreamer:
     """
-    Generate `n` characters, calling on_char(text) for each one as it is produced (so the
-    caller can print it live). We hand GPT.generate an `on_token` callback so it can surface
-    each character the moment it's sampled while reusing its KV cache internally — one forward
-    step per new character instead of re-reading the whole prompt every time.
+    Streams generated characters to `emit`, but stops at a `stop` string and never prints it.
+    To avoid leaking a partial marker, it holds back the last len(stop)-1 characters until they
+    are proven not to be the start of the marker. Used in --chat mode to cut the model off at
+    "<|endoftext|>". `feed` returns True once the marker is seen (GPT.generate then stops).
     """
-    return model.generate(idx, n, on_token=lambda tok: on_char(decode([tok])), **gen_kwargs)
+
+    def __init__(self, stop, emit):
+        self.stop, self.emit, self.buf = stop, emit, ""
+
+    def feed(self, ch):
+        self.buf += ch
+        hit = self.buf.find(self.stop)
+        if hit != -1:
+            self.emit(self.buf[:hit])                      # emit text before the marker, then stop
+            self.buf = ""
+            return True
+        keep = len(self.stop) - 1                          # might be the start of the marker
+        if len(self.buf) > keep:
+            self.emit(self.buf[:-keep])
+            self.buf = self.buf[-keep:]
+        return False
+
+    def close(self):
+        if self.buf:                                       # flush leftovers if no marker appeared
+            self.emit(self.buf)
+            self.buf = ""
+
+
+def generate_reply(model, encode, decode, user_prompt, args, gen_kwargs, on_char):
+    """
+    Generate one reply, streaming each character to `on_char`. In --chat mode we wrap the prompt
+    in the instruction template and stop at the EOT marker; otherwise it's a plain continuation.
+    GPT.generate reuses its KV cache internally, so this is one forward step per character.
+    """
+    text = PROMPT_TEMPLATE.format(instruction=user_prompt) if args.chat else user_prompt
+    idx = mx.array(encode(text) or encode("\n"))[None]
+    if args.chat:
+        streamer = StopStreamer(EOT, on_char)
+        model.generate(idx, args.tokens, on_token=lambda t: streamer.feed(decode([t])), **gen_kwargs)
+        streamer.close()
+    else:
+        model.generate(idx, args.tokens, on_token=lambda t: on_char(decode([t])) or False, **gen_kwargs)
 
 
 def run_once(model, encode, decode, args, gen_kwargs):
-    start_ids = encode(args.prompt) or encode("\n")
-    idx = mx.array(start_ids)[None]
-    out = model.generate(idx, max_new_tokens=args.tokens, **gen_kwargs)
-    print(decode(out[0].tolist()))
+    print(args.prompt, end="\n" if args.chat else "", flush=True)   # echo the prompt/instruction
+    generate_reply(model, encode, decode, args.prompt, args, gen_kwargs,
+                   on_char=lambda ch: print(ch, end="", flush=True))
+    print()
 
 
 def run_interactive(model, encode, decode, args, gen_kwargs):
-    print("interactive mode — type a prompt and press Enter; Ctrl-D or Ctrl-C to quit.")
+    mode = "chat (instructions)" if args.chat else "continuation"
+    print(f"interactive {mode} mode — type and press Enter; Ctrl-D or Ctrl-C to quit.")
     print(f"(temperature={args.temperature}, top_k={args.top_k}, top_p={args.top_p}, "
           f"rep_penalty={args.repetition_penalty}, {args.tokens} chars per reply)")
     while True:
@@ -65,12 +103,10 @@ def run_interactive(model, encode, decode, args, gen_kwargs):
         except (EOFError, KeyboardInterrupt):
             print("\nbye")
             return
-
-        start_ids = encode(prompt) or encode("\n")
-        idx = mx.array(start_ids)[None]
-        print(prompt, end="", flush=True)                 # echo the seed, then stream the rest
-        stream_generate(model, idx, args.tokens, decode,
-                        on_char=lambda ch: print(ch, end="", flush=True), **gen_kwargs)
+        if not args.chat:
+            print(prompt, end="", flush=True)             # echo the seed, then stream the rest
+        generate_reply(model, encode, decode, prompt, args, gen_kwargs,
+                       on_char=lambda ch: print(ch, end="", flush=True))
         print()
 
 
@@ -89,6 +125,9 @@ def main():
                    help="dampen chars already generated to avoid loops (1.0 = off, try ~1.2)")
     p.add_argument("-i", "--interactive", action="store_true",
                    help="load the model once and keep prompting in a loop, streaming output")
+    p.add_argument("--chat", action="store_true",
+                   help="treat the prompt as an INSTRUCTION (wrap it in the SFT template and "
+                        "stop at the end marker). Use with an SFT checkpoint from sft.py.")
     p.add_argument("--ckpt", type=str, default="ckpt.npz")
     p.add_argument("--meta", type=str, default="ckpt.json")
     args = p.parse_args()

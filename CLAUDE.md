@@ -29,19 +29,23 @@ schedule, and decoupled weight decay on matrices only.
 ```bash
 python data.py                       # download + tokenize the corpus, print stats
 python bpe.py                        # standalone BPE demo (train + encode/decode)
-python train.py                      # train (5000 iters, ~7 min), saves ckpt.npz + ckpt.json
-python sample.py --prompt "ROMEO:"   # one-shot generation from the checkpoint
+python train.py                      # pretrain (5000 iters, ~7 min), saves ckpt.npz + ckpt.json
+python sft.py                        # post-train: instruction-tune the base ckpt -> ckpt_sft.*
+python sample.py --prompt "ROMEO:"   # one-shot generation from the base checkpoint
 python sample.py -i                  # interactive: load once, loop prompts, stream output
+python sample.py --chat --ckpt ckpt_sft.npz --meta ckpt_sft.json --prompt "Write a story about a cat."
 ```
 
 `sample.py` flags: `--prompt`, `--tokens`, `--temperature` (0.8), `--top_k` (40), `--top_p`
-(0=off), `--repetition_penalty` (1.0=off), `-i`/`--interactive`, `--ckpt`, `--meta`.
+(0=off), `--repetition_penalty` (1.0=off), `-i`/`--interactive`, `--chat` (instruction mode,
+use with an SFT ckpt), `--ckpt`, `--meta`.
 
 Toggle behavior from `config.py`: `tokenizer` (`"char"`/`"bpe"`) + `bpe_vocab_size`,
 `use_moe`/`n_experts`/`n_experts_per_tok`, `n_kv_head` (< `n_head` = GQA), `data_url`.
 
 Full end-to-end reference (math, every module, config table, training/sampling internals):
-[`ARCHITECTURE.md`](ARCHITECTURE.md). Keep it in sync when you change architecture or config.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Keep it in sync when you change architecture or
+config. A reveal.js slide deck lives at `docs/presentation.html`.
 
 ## Layout (read in this order to understand it)
 
@@ -50,8 +54,9 @@ Full end-to-end reference (math, every module, config table, training/sampling i
 | `data.py`   | tokenizers (`CharTokenizer`, dispatch to `bpe`) + `get_batch` window sampler + save/load. |
 | `bpe.py`    | from-scratch byte-level BPE tokenizer (minbpe-style). Used when `config.tokenizer="bpe"`. |
 | `model.py`  | the GPT. **Core file.** `CausalSelfAttention` (RoPE/GQA) → `MLP`/`MoE` → `Block` → `GPT`. |
-| `train.py`  | training loop (`mx.compile`, warmup→cosine LR, masked weight decay), `estimate_loss`, save. |
-| `sample.py` | autoregressive generation (top-k/top-p/rep-penalty); `-i` for an interactive streaming REPL. |
+| `train.py`  | pretraining loop (`mx.compile`, warmup→cosine LR, masked weight decay), `estimate_loss`, save. |
+| `sft.py`    | post-training: instruction-tune the base ckpt with **loss-masked** (instruction,response) pairs synthesized from the corpus. |
+| `sample.py` | autoregressive generation (top-k/top-p/rep-penalty); `-i` REPL, `--chat` instruction mode. |
 | `config.py` | single `Config` dataclass with every hyperparameter, commented. |
 
 ## Conventions / things to preserve

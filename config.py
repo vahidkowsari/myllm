@@ -73,6 +73,17 @@ class Config:
         "TinyStoriesV2-GPT4-valid.txt"
     )
 
+    # --- supervised fine-tuning (SFT / instruction tuning) ------------------
+    # After pretraining (train.py), SFT teaches the base model to FOLLOW INSTRUCTIONS instead
+    # of just continuing text. We build instruction/response pairs from the story corpus, wrap
+    # them in a fixed template, and train only on the RESPONSE tokens (loss masking). See sft.py.
+    sft_ckpt_path: str = "ckpt_sft.npz"     # fine-tuned weights (separate from the base ckpt)
+    sft_meta_path: str = "ckpt_sft.json"
+    sft_lr: float = 1e-4                     # smaller LR than pretraining — just a gentle nudge
+    sft_iters: int = 2000                   # SFT needs far fewer steps than pretraining
+    sft_warmup_iters: int = 50
+    sft_max_pairs: int = 5000               # how many stories to turn into instruction pairs
+
     # --- bookkeeping ---------------------------------------------------------
     data_path: str = "tinystories.txt"  # raw training text
     # MLX saves model weights to a .npz; the tokenizer vocab + this config go in a

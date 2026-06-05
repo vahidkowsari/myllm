@@ -8,8 +8,9 @@ It is deliberately in the spirit of Karpathy's nanoGPT, but the code is annotate
 trace a single character all the way from text → token → embedding → attention → logits → loss
 → gradient, and back.
 
-> **Full walkthrough:** see [`ARCHITECTURE.md`](ARCHITECTURE.md) for an end-to-end reference —
-> the math, every module, the training/sampling internals, and a complete config reference.
+> **Full walkthrough:** see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for an end-to-end
+> reference — the math, every module, the training/sampling internals, and a complete config
+> reference. A slide deck is in [`docs/presentation.html`](docs/presentation.html).
 
 ## The layers, bottom to top
 
@@ -73,8 +74,9 @@ python sample.py -i
 | `data.py`   | downloads the corpus, builds the tokenizer, makes train/val tensors, saves/loads vocab |
 | `bpe.py`    | a from-scratch byte-level BPE tokenizer (used when `tokenizer = "bpe"`) |
 | `model.py`  | the GPT itself — embeddings, attention, feed-forward, blocks, head. **Read this first.** |
-| `train.py`  | the training loop (`mx.compile`, warmup→cosine LR, weight decay) + loss reporting |
-| `sample.py` | autoregressive generation from a checkpoint (`-i` = interactive streaming REPL) |
+| `train.py`  | the pretraining loop (`mx.compile`, warmup→cosine LR, weight decay) + loss reporting |
+| `sft.py`    | post-training: instruction-tune the base model on loss-masked (instruction, response) pairs |
+| `sample.py` | autoregressive generation (`-i` = interactive REPL, `--chat` = instruction mode) |
 | `config.py` | one place for all hyperparameters (model size, lr, tokenizer, MoE/GQA toggles, etc.) |
 
 ## Knobs to play with

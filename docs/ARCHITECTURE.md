@@ -14,13 +14,14 @@ Every design choice optimizes for *understanding* over performance.
 1. [The big picture](#1-the-big-picture)
 2. [Data & tokenization](#2-data--tokenization)
 3. [The model](#3-the-model-modelpy)
-4. [Training](#4-training-trainpy)
+4. [Training (pretraining)](#4-training-trainpy)
 5. [Sampling / generation](#5-sampling--generation-samplepy)
-6. [Configuration reference](#6-configuration-reference-configpy)
-7. [Checkpoint format](#7-checkpoint-format)
-8. [Parameter budget](#8-parameter-budget)
-9. [What's modern vs. GPT-2](#9-whats-modern-vs-gpt-2)
-10. [Glossary](#10-glossary)
+6. [Post-training (SFT)](#6-post-training-sft-sftpy)
+7. [Configuration reference](#7-configuration-reference-configpy)
+8. [Checkpoint format](#8-checkpoint-format)
+9. [Parameter budget](#9-parameter-budget)
+10. [What's modern vs. GPT-2](#10-whats-modern-vs-gpt-2)
+11. [Glossary](#11-glossary)
 
 ---
 
@@ -361,7 +362,52 @@ a partial multibyte UTF-8 sequence renders as `�` mid-stream; harmless for ASC
 
 ---
 
-## 6. Configuration reference (`config.py`)
+## 6. Post-training (SFT) (`sft.py`)
+
+Everything above produces a **base model** — a text continuer. **Post-training** is what turns
+it into something that follows instructions. The first (and most important) stage is
+**Supervised Fine-Tuning (SFT)**, a.k.a. instruction tuning. The full modern recipe is
+*pretrain → SFT → preference tuning (DPO/RLHF)*; `myllm` implements the first two stages of
+that arc conceptually, with SFT in code.
+
+SFT is just pretraining with **two changes**:
+
+1. **Data shape.** Instead of raw text, use `(instruction, response)` pairs wrapped in a fixed
+   template the model learns to recognize:
+   ```
+   Instruction:
+   {instruction}
+
+   Response:
+   {response}<|endoftext|>
+   ```
+   The template uses only characters in the corpus vocab (no `#`), and ends the response with
+   the same `<|endoftext|>` marker the base model already saw between stories — so it doubles as
+   a learned "stop generating" signal.
+
+2. **Loss masking.** Grade the model **only on the response tokens**. It should learn to
+   *produce* the response, not to echo the instruction back. So the cross-entropy for every
+   instruction/header token is multiplied by 0; only response tokens (plus the end marker)
+   count. This single mask is what makes SFT "supervised" in the instruction sense.
+
+Because there's no human instruction dataset here, `sft.py` **synthesizes** one from the same
+TinyStories corpus: split it on `<|endoftext|>` into individual stories, pick each story's most
+frequent content word as its topic, and form the pair `("Write a story about {topic}.", story)`.
+The pairs therefore use only known characters, and after SFT the model responds to the template
+with a (topical, simple) story instead of ignoring the instruction.
+
+Key pieces in `sft.py`: `build_pairs` (synthesize pairs), `encode_pairs` (tokenize into
+`(ids, loss_mask)`), `sft_loss` (masked cross-entropy: `(ce * mask).sum() / mask.sum()`), and a
+`main` that loads the base `ckpt.npz`, fine-tunes with a small LR for `sft_iters` steps (same
+compiled-step machinery as `train.py`), and saves `ckpt_sft.npz` + `ckpt_sft.json`. Sample it
+with `python sample.py --chat --ckpt ckpt_sft.npz --meta ckpt_sft.json`.
+
+> **Reality check.** A ~2.7M-param model is far too small to become a real assistant — SFT here
+> demonstrates the *mechanism* (template + loss masking + instruction-following emerging), not
+> capability. Preference tuning (DPO/RLHF), the stage after SFT, is not implemented; it aligns
+> an already-capable model to human preferences and needs a base model far larger than this.
+
+## 7. Configuration reference (`config.py`)
 
 Every hyperparameter lives in one `Config` dataclass. Changing model-shape numbers is the whole
 story of LLM scaling in miniature.
@@ -420,7 +466,7 @@ story of LLM scaling in miniature.
 
 ---
 
-## 7. Checkpoint format
+## 8. Checkpoint format
 
 A checkpoint is **two files** (both gitignored, both regenerable by retraining):
 
@@ -436,7 +482,7 @@ architecture are not loadable by the current model — retrain.)
 
 ---
 
-## 8. Parameter budget
+## 9. Parameter budget
 
 The defaults give **~2.68M** parameters. Rough breakdown per the default config
 (`n_embd=192`, `n_layer=6`, `n_head=6`, vocab≈65 for char):
@@ -457,7 +503,7 @@ If you change `n_embd` / `n_layer` / `n_head`, update the param-count mentions i
 
 ---
 
-## 9. What's modern vs. GPT-2
+## 10. What's modern vs. GPT-2
 
 `myllm` started as a faithful GPT-2 (2019) and was modernized to ~2024 spec:
 
@@ -475,7 +521,7 @@ Each change is the prevailing default in current open models (Llama, Mistral, Qw
 
 ---
 
-## 10. Glossary
+## 11. Glossary
 
 - **token** — an integer the model actually consumes; one character (char tokenizer) or a
   subword chunk (BPE).
@@ -498,4 +544,4 @@ Each change is the prevailing default in current open models (Llama, Mistral, Qw
 
 - An attention-weight **heatmap** visualizer.
 - A hand-written **autograd** engine (`tensor.py`, micrograd-style) to demystify backprop.
-- A true sparse MoE dispatch; instruction/chat fine-tuning; a larger/structured dataset.
+- A true sparse MoE dispatch; preference tuning (DPO) after the SFT in §6; a larger model.
