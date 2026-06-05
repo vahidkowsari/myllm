@@ -182,6 +182,25 @@ Mistral, Qwen, etc.
 Because Q and K/V can have different head counts, the projections are **separate** (`q_proj`,
 `kv_proj`) rather than one fused `qkv` matrix.
 
+#### Two optional attention tweaks (recent papers)
+
+Both are off by default and config-gated; each travels with the checkpoint (the flag lives in the
+saved `config`), so sampling rebuilds the exact same architecture.
+
+- **QK-Norm** (`use_qk_norm`). Apply an `RMSNorm` to each head's Query and Key vectors (over
+  `head_dim`) **before** RoPE/scoring. This bounds the magnitude of `Q·Kᵀ`, so the attention
+  logits can't blow up — a cheap stability win that lets you push the learning rate higher without
+  divergence. Q and K get their own learnable gains (two `RMSNorm` modules), adding a handful of
+  params. Now standard in many 2024-25 models.
+- **Softmax-off-by-one** (`use_softmax1`, a.k.a. *softmax1* / *quiet attention*). Add a phantom
+  `+1` to the softmax denominator — `softmax1(x)_i = exp(x_i) / (1 + Σ exp(x_j))` — as if there
+  were one extra logit pinned at 0. A normal softmax forces every attention row to sum to exactly
+  1, so a token must spend all its attention somewhere even when nothing is relevant; that pressure
+  surfaces as a few giant outlier activations (bad for quantization). The `+1` lets a row sum to
+  **less than 1**, i.e. attend to "nothing" — which is also how *attention sinks* form. Implemented
+  as `softmax_off_by_one` (numerically stable: the phantom logit 0 is folded into the row-max).
+  Zero extra params.
+
 ### 3.4 RMSNorm
 
 `nn.RMSNorm(n_embd)` rescales each token vector by its root-mean-square, then multiplies by a
@@ -353,6 +372,23 @@ Applied per step, in this order:
 Then a token is **sampled** (not argmaxed) from the surviving logits via
 `mx.random.categorical`, so output has variety.
 
+### Entropy-based ("entropix") sampling
+
+`--entropy` switches to a self-paced sampler (`GPT._entropy_sample`) that adapts to the model's
+*own* uncertainty instead of a fixed temperature — when on, it **bypasses** `--temperature`,
+`--top_k`, and `--top_p` (the repetition penalty still applies first). From the next-token
+distribution `p` it measures two quantities, both in nats:
+
+- **entropy** `H = -Σ p·log p` — how spread out the distribution is overall.
+- **varentropy** `Σ p·(-log p − H)²` — the *variance of the surprisal*: is the model torn between a
+  few sharp options (low) or genuinely vague (high)?
+
+The rule: if **both** are below their thresholds the model is confident → take the **argmax**
+(greedy); otherwise sample at a temperature that **rises** with entropy and varentropy, so a more
+uncertain model explores more. Knobs live in `config.py` (`ent_low`, `vent_low`, `ent_base_temp`,
+`ent_ent_coef`, `ent_vent_coef`). This makes the model's uncertainty visible in how the text is
+generated — confident stretches go deterministic, vague ones loosen up.
+
 ### Streaming
 
 `generate` accepts an `on_token` callback invoked with each token id as it's produced.
@@ -423,6 +459,8 @@ story of LLM scaling in miniature.
 | `n_layer` | 6 | number of transformer blocks (depth = reasoning steps) |
 | `dropout` | 0.1 | regularization |
 | `rope_base` | 10000.0 | RoPE frequency base (θ) |
+| `use_qk_norm` | False | RMSNorm Q and K per head before scoring (§3.3) — stability win |
+| `use_softmax1` | False | softmax-off-by-one: let attention rows sum to <1 (§3.3) |
 
 ### Mixture of experts
 
@@ -446,6 +484,18 @@ story of LLM scaling in miniature.
 | `eval_iters` | 100 | batches averaged per loss estimate |
 | `weight_decay` | 0.1 | decoupled decay, weight matrices only |
 | `grad_clip` | 1.0 | max gradient norm |
+
+### Entropy-based sampling (`--entropy`)
+
+Used only by `sample.py --entropy` (see §5); all in nats.
+
+| field | default | meaning |
+|-------|---------|---------|
+| `ent_low` | 0.6 | below this entropy **and** `vent_low` varentropy → greedy argmax |
+| `vent_low` | 0.6 | varentropy threshold for the confident/greedy regime |
+| `ent_base_temp` | 0.6 | temperature floor when sampling (non-greedy regime) |
+| `ent_ent_coef` | 0.3 | how much each nat of entropy heats the temperature |
+| `ent_vent_coef` | 0.3 | how much each nat of varentropy heats the temperature |
 
 ### Tokenizer & data
 

@@ -35,6 +35,18 @@ class Config:
     # fall off across the head dimension; 10000 is the value used by GPT-NeoX/Llama/etc.
     rope_base: float = 10000.0
 
+    # --- attention tweaks (recent-paper experiments) -------------------------
+    # use_qk_norm: RMSNorm each attention head's Query and Key vectors before computing Q·Kᵀ
+    # (the "QK-Norm" trick, now standard in many 2024-25 models). It bounds the size of the
+    # attention logits, which stops them blowing up and lets you train at a higher learning
+    # rate without divergence. Cheap stability win; off by default to keep the base model plain.
+    use_qk_norm: bool = False
+    # use_softmax1: the "softmax-off-by-one" / quiet-attention tweak — add a phantom +1 to the
+    # softmax denominator so every attention row is free to sum to LESS than 1, i.e. a token can
+    # attend to "nothing". This drains the huge outlier activations that otherwise appear in a
+    # few channels (which makes the model easier to quantize) and is how "attention sinks" form.
+    use_softmax1: bool = False
+
     # --- mixture of experts (MoE) -------------------------------------------
     # When use_moe is True, each block's feed-forward becomes a SPARSE mixture of experts:
     # `n_experts` separate SwiGLU networks plus a tiny router that sends each token to its top
@@ -46,6 +58,19 @@ class Config:
     # Load-balancing aux loss weight: nudges the router to spread tokens across all experts
     # instead of collapsing onto one favorite. Added to the training loss only when use_moe.
     moe_aux_coef: float = 0.01
+
+    # --- entropy-based ("entropix") sampling --------------------------------
+    # An alternative to fixed temperature/top-k/top-p (sample.py --entropy). At each step we
+    # measure the model's OWN uncertainty from the next-token distribution — its entropy (how
+    # spread out it is) and varentropy (how spread out the *surprisal* is, i.e. is it torn
+    # between a few sharp options or genuinely vague) — and adapt sampling to it: when the model
+    # is confident we cool toward greedy; when it is uncertain we heat up. Makes uncertainty
+    # visible and audible in the output. Thresholds/coeffs are in nats. See GPT._entropy_sample.
+    ent_low: float = 0.6        # below this entropy AND vent_low varentropy -> just take argmax
+    vent_low: float = 0.6
+    ent_base_temp: float = 0.6  # temperature floor used when sampling (not in the greedy regime)
+    ent_ent_coef: float = 0.3   # how much each nat of entropy heats the temperature
+    ent_vent_coef: float = 0.3  # how much each nat of varentropy heats the temperature
 
     # --- training ------------------------------------------------------------
     batch_size: int = 64        # how many text chunks per gradient step

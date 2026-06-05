@@ -123,6 +123,10 @@ def main():
                         "probability (0 = disabled)")
     p.add_argument("--repetition_penalty", type=float, default=1.0,
                    help="dampen chars already generated to avoid loops (1.0 = off, try ~1.2)")
+    p.add_argument("--entropy", action="store_true",
+                   help="entropy-based ('entropix') sampling: adapt to the model's own "
+                        "uncertainty instead of fixed temperature (ignores --temperature/--top_k/"
+                        "--top_p). Tune via the ent_*/vent_* knobs in config.py.")
     p.add_argument("-i", "--interactive", action="store_true",
                    help="load the model once and keep prompting in a loop, streaming output")
     p.add_argument("--chat", action="store_true",
@@ -139,6 +143,7 @@ def main():
         top_k=args.top_k if args.top_k > 0 else None,
         top_p=args.top_p if args.top_p > 0 else None,
         repetition_penalty=args.repetition_penalty,
+        entropy_sampling=args.entropy,
     )
 
     if args.interactive:

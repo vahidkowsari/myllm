@@ -85,6 +85,25 @@ def repeat_kv(x, groups: int):
     return mx.repeat(x, groups, axis=1)
 
 
+def softmax_off_by_one(att, axis=-1):
+    """
+    "Softmax off by one" (a.k.a. softmax1 / quiet attention): like a normal softmax but with a
+    phantom +1 added to the denominator, as if there were one extra logit pinned at 0:
+        softmax1(x)_i = exp(x_i) / (1 + sum_j exp(x_j))
+    Ordinary softmax forces each attention row to sum to exactly 1, so a token MUST distribute
+    all its attention somewhere even when nothing is relevant; that pressure shows up as a few
+    enormous outlier activations. The +1 is an escape hatch: a row may now sum to less than 1,
+    letting a token attend to "nothing". We compute it the numerically-stable way — subtract the
+    row max `m` (and note the phantom logit 0 must be in that max, hence `maximum(m, 0)`), so the
+    phantom term `exp(0)` becomes `exp(-m)` in the denominator.
+    """
+    m = mx.max(att, axis=axis, keepdims=True)
+    m = mx.maximum(m, 0.0)                          # the phantom logit is 0, so the max is >= 0
+    e = mx.exp(att - m)                             # masked positions were -inf -> exp(...) = 0
+    denom = mx.exp(-m) + mx.sum(e, axis=axis, keepdims=True)   # the "+1", shifted by -m
+    return e / denom
+
+
 class CausalSelfAttention(nn.Module):
     """
     Self-attention: the one mechanism that makes a transformer a transformer.
@@ -117,12 +136,21 @@ class CausalSelfAttention(nn.Module):
         self.n_kv_head = cfg.n_kv_head
         self.groups = cfg.n_head // cfg.n_kv_head     # how many Q heads share one K/V head
         self.rope_base = cfg.rope_base
+        self.use_softmax1 = cfg.use_softmax1
 
         # Separate projections (rather than one fused qkv) because Q and K/V can have different
         # head counts under GQA: Q gets n_head heads, K and V get n_kv_head heads each.
         self.q_proj = nn.Linear(cfg.n_embd, cfg.n_head * self.head_dim)
         self.kv_proj = nn.Linear(cfg.n_embd, 2 * cfg.n_kv_head * self.head_dim)
         self.proj = nn.Linear(cfg.n_embd, cfg.n_embd)   # output projection, after merging heads
+
+        # QK-Norm (optional): an RMSNorm applied to each head's Query and Key vectors before
+        # scoring. It re-scales every head to unit RMS, so Q·Kᵀ can't run away to giant logits —
+        # a cheap training-stability trick. The two norms have their OWN learnable gains, hence
+        # two modules; they operate over the last axis (head_dim). None when the flag is off.
+        self.use_qk_norm = cfg.use_qk_norm
+        self.q_norm = nn.RMSNorm(self.head_dim) if cfg.use_qk_norm else None
+        self.k_norm = nn.RMSNorm(self.head_dim) if cfg.use_qk_norm else None
 
         self.attn_dropout = nn.Dropout(cfg.dropout)
         self.resid_dropout = nn.Dropout(cfg.dropout)
@@ -141,6 +169,12 @@ class CausalSelfAttention(nn.Module):
         k, v = mx.split(self.kv_proj(x), 2, axis=-1)
         k = k.reshape(B, T, self.n_kv_head, hd).transpose(0, 2, 1, 3)
         v = v.reshape(B, T, self.n_kv_head, hd).transpose(0, 2, 1, 3)
+
+        # QK-Norm (optional): normalize each head's Q and K *before* RoPE so the rotation acts on
+        # already-bounded vectors and the later Q·Kᵀ logits stay in a sane range.
+        if self.use_qk_norm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
 
         # RoPE: rotate Q and K by each token's ABSOLUTE position. `offset` is how many tokens
         # already sit in the cache, so these new tokens get positions offset, offset+1, ...
@@ -173,7 +207,9 @@ class CausalSelfAttention(nn.Module):
         k_pos = mx.arange(Tk)[None, :]                     # (1, Tk)
         mask = k_pos <= q_pos                              # (T, Tk) True where attending is OK
         att = mx.where(mask, att, float("-inf"))          # block the future with -inf
-        att = mx.softmax(att, axis=-1)                    # normalize each row to a distribution
+        # Normalize each row to attention weights. The default softmax forces the row to sum to 1;
+        # softmax_off_by_one lets it sum to less, so a token can attend to "nothing" (see config).
+        att = softmax_off_by_one(att, axis=-1) if self.use_softmax1 else mx.softmax(att, axis=-1)
         att = self.attn_dropout(att)
 
         y = att @ v                                        # (B, n_head, T, hd)
@@ -433,15 +469,46 @@ class GPT(nn.Module):
         choice = mx.random.categorical(sorted_logits)      # (B,) index into the sorted order
         return mx.take_along_axis(order, choice[:, None], axis=-1)[:, 0]
 
+    def _entropy_sample(self, logits):
+        """
+        Entropy-based ("entropix"-style) sampling: let the model's OWN uncertainty pick how
+        adventurously to sample, instead of a fixed temperature. logits: (B, vocab) -> ids (B,).
+
+        From the next-token distribution p we measure two things (both in nats):
+          - entropy      = -Σ p·log p           how spread out the distribution is overall.
+          - varentropy   = Σ p·(-log p - H)^2   the variance of the surprisal: is the model
+                           torn between a few SHARP options (low) or genuinely vague (high)?
+        Then:
+          - if BOTH are low the model is confident -> just take the argmax (greedy), no dice-roll;
+          - otherwise sample at a temperature that RISES with entropy and varentropy, so a more
+            uncertain model explores more. See the `ent_*`/`vent_*` knobs in config.py.
+        """
+        cfg = self.cfg
+        logp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)   # log-softmax, (B, vocab)
+        p = mx.exp(logp)
+        surprisal = -logp                                             # (B, vocab)
+        entropy = mx.sum(p * surprisal, axis=-1, keepdims=True)       # (B, 1)
+        varentropy = mx.sum(p * (surprisal - entropy) ** 2, axis=-1, keepdims=True)   # (B, 1)
+
+        # Temperature grows with how unsure the model is; floor at ent_base_temp.
+        temp = cfg.ent_base_temp + cfg.ent_ent_coef * entropy + cfg.ent_vent_coef * varentropy
+        sampled = mx.random.categorical(logits / temp)               # (B,)
+        greedy = mx.argmax(logits, axis=-1)                          # (B,)
+        # Confident regime: low entropy AND low varentropy -> deterministic argmax.
+        confident = (entropy < cfg.ent_low) & (varentropy < cfg.vent_low)   # (B, 1)
+        return mx.where(confident[:, 0], greedy, sampled)
+
     def generate(self, idx, max_new_tokens: int, temperature: float = 1.0,
                  top_k: int | None = None, top_p: float | None = None,
-                 repetition_penalty: float = 1.0, on_token=None):
+                 repetition_penalty: float = 1.0, entropy_sampling: bool = False,
+                 on_token=None):
         """
         Autoregressive sampling with a KV cache. Each step:
           1. forward pass -> logits for the next token
           2. (optional) repetition penalty on tokens already generated
-          3. scale by temperature
-          4. (optional) top_k and/or top_p filtering, then sample one token
+          3. EITHER entropy_sampling (adapt to the model's own uncertainty; ignores the temperature
+             /top_k/top_p knobs) OR the classic path: scale by temperature, then top_k/top_p filter
+          4. sample one token
           5. append it and repeat
         If `on_token` is given it is called with each new token id as it is produced, so a
         caller can stream output live (sample.py's -i mode uses this). If `on_token` returns a
@@ -463,16 +530,21 @@ class GPT(nn.Module):
             logits = logits[:, -1, :]                      # (B, vocab) — only the last step
             if repetition_penalty != 1.0:
                 logits = self._apply_repetition_penalty(logits, idx, repetition_penalty)
-            logits = logits / temperature
-            if top_k is not None:
-                k = min(top_k, logits.shape[-1])
-                kth = mx.sort(logits, axis=-1)[:, -k][:, None]      # k-th largest logit per row
-                logits = mx.where(logits < kth, float("-inf"), logits)
 
-            if top_p is not None:
-                next_id = self._sample_top_p(logits, top_p)
+            if entropy_sampling:
+                # Self-paced sampling — reads uncertainty off the RAW logits, so temperature/
+                # top_k/top_p are deliberately bypassed here.
+                next_id = self._entropy_sample(logits)
             else:
-                next_id = mx.random.categorical(logits)    # sample (not argmax) for variety
+                logits = logits / temperature
+                if top_k is not None:
+                    k = min(top_k, logits.shape[-1])
+                    kth = mx.sort(logits, axis=-1)[:, -k][:, None]  # k-th largest logit per row
+                    logits = mx.where(logits < kth, float("-inf"), logits)
+                if top_p is not None:
+                    next_id = self._sample_top_p(logits, top_p)
+                else:
+                    next_id = mx.random.categorical(logits)   # sample (not argmax) for variety
             next_id = next_id[:, None].astype(idx.dtype)
 
             idx = mx.concatenate([idx, next_id], axis=1)

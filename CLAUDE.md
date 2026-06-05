@@ -40,11 +40,14 @@ python sample_mm.py --n 8            # caption fresh random shape images (render
 ```
 
 `sample.py` flags: `--prompt`, `--tokens`, `--temperature` (0.8), `--top_k` (40), `--top_p`
-(0=off), `--repetition_penalty` (1.0=off), `-i`/`--interactive`, `--chat` (instruction mode,
+(0=off), `--repetition_penalty` (1.0=off), `--entropy` (entropy-based "entropix" sampling;
+overrides temperature/top_k/top_p), `-i`/`--interactive`, `--chat` (instruction mode,
 use with an SFT ckpt), `--ckpt`, `--meta`.
 
 Toggle behavior from `config.py`: `tokenizer` (`"char"`/`"bpe"`) + `bpe_vocab_size`,
-`use_moe`/`n_experts`/`n_experts_per_tok`, `n_kv_head` (< `n_head` = GQA), `data_url`.
+`use_moe`/`n_experts`/`n_experts_per_tok`, `n_kv_head` (< `n_head` = GQA),
+`use_qk_norm` (RMSNorm Q/K before scoring), `use_softmax1` (softmax-off-by-one attention),
+`ent_*`/`vent_*` (entropy-sampling knobs), `data_url`.
 
 Full end-to-end reference (math, every module, config table, training/sampling internals):
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Keep it in sync when you change architecture or
