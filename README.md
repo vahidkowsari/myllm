@@ -62,10 +62,32 @@ python sample.py --prompt "ROMEO:"
 
 # 5b. ...or run it interactively: loads once, then loop typing prompts and watch it stream
 python sample.py -i
+
+# 5c. ...or serve it over HTTP so other programs can call it (stdlib only, no extra deps)
+python serve.py            # then: curl -s localhost:8000/complete -d '{"prompt": "Once"}'
 ```
 
 > It's a *character-level Shakespeare continuer*, not a chatbot — give it the start of a line
 > and it keeps writing in that style.
+
+### Train on your own data
+
+Point it at a folder of text files and it builds the corpus for you — no code changes:
+
+```python
+# in config.py
+config.data_dir  = "./mydata"   # every *.txt under here becomes the training corpus
+config.tokenizer = "bpe"        # subwords beat char-level on real prose/code
+config = medium()               # (optional) the larger ~20-25M preset
+```
+
+```bash
+python train.py            # trains on your corpus
+python serve.py            # serve the result
+```
+
+A 2.7–25M model won't be an assistant, but on focused data it makes a surprisingly decent
+domain-specific autocomplete / text generator.
 
 ## Bonus: a multimodal (image → text) demo
 
@@ -94,6 +116,7 @@ comment at the top of `vision.py`.
 | `model.py`  | the GPT itself — embeddings, attention, feed-forward, blocks, head. **Read this first.** |
 | `train.py`  | the pretraining loop (`mx.compile`, warmup→cosine LR, weight decay) + loss reporting |
 | `sft.py`    | post-training: instruction-tune the base model on loss-masked (instruction, response) pairs |
+| `serve.py`  | a tiny stdlib HTTP completion API (`POST /complete`, with optional SSE streaming) around a checkpoint |
 | `sample.py` | autoregressive generation (`-i` = interactive REPL, `--chat` = instruction mode) |
 | `vision.py` | multimodal demo: synthetic shape images, `PatchEmbed` (image→vectors), and the captioning model |
 | `train_mm.py`| trains the image→caption model from scratch (loss-masked captions, like SFT) |

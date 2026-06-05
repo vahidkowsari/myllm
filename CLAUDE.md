@@ -34,6 +34,7 @@ python sft.py                        # post-train: instruction-tune the base ckp
 python sample.py --prompt "ROMEO:"   # one-shot generation from the base checkpoint
 python sample.py -i                  # interactive: load once, loop prompts, stream output
 python sample.py --chat --ckpt ckpt_sft.npz --meta ckpt_sft.json --prompt "Write a story about a cat."
+python serve.py                      # HTTP completion API (stdlib only) at 127.0.0.1:8000
 python vision.py                     # multimodal demo: show synthetic shape images + captions
 python train_mm.py                   # train the image->caption model -> ckpt_mm.npz + ckpt_mm.json
 python sample_mm.py --n 8            # caption fresh random shape images (rendered in the terminal)
@@ -55,6 +56,11 @@ The tokenized corpus is cached to disk and **memory-mapped** (`data.load_tokens`
 writes `<corpus>.<tokenizer>.tokens.bin` (+ `.json`) once and `get_batch` reads windows from the
 memmap, so a corpus bigger than RAM still trains. The cache files are gitignored.
 
+**Train on your own data:** set `config.data_dir` to a folder (and optionally `data_glob`); every
+matching text file is concatenated into `data_path` by `data.read_corpus`, then tokenized/cached as
+usual. Empty `data_dir` falls back to `data_url` (the TinyStories demo). Prefer `tokenizer="bpe"`
+for real prose/code.
+
 Full end-to-end reference (math, every module, config table, training/sampling internals):
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Keep it in sync when you change architecture or
 config. A reveal.js slide deck lives at `docs/presentation.html`.
@@ -69,6 +75,7 @@ config. A reveal.js slide deck lives at `docs/presentation.html`.
 | `train.py`  | pretraining loop (`mx.compile`, warmup→cosine LR, masked weight decay), `estimate_loss`, save. |
 | `sft.py`    | post-training: instruction-tune the base ckpt with **loss-masked** (instruction,response) pairs synthesized from the corpus. |
 | `sample.py` | autoregressive generation (top-k/top-p/rep-penalty); `-i` REPL, `--chat` instruction mode. |
+| `serve.py`  | stdlib-only HTTP completion API around a checkpoint: `POST /complete` (JSON), `stream:true` for SSE. Single-threaded (MLX binds its GPU stream to the model's thread). Reuses `sample.load_model`. |
 | `vision.py` | **multimodal demo.** synthetic colored-shape images + `PatchEmbed` (image→vectors) + `CaptionModel` (PatchEmbed + the *unmodified* GPT) + an ANSI-color terminal previewer. |
 | `train_mm.py`| train `vision.CaptionModel` image→caption from scratch with loss-masked captions (same masking idea as `sft.py`). |
 | `sample_mm.py`| caption fresh random images from `ckpt_mm.*`, rendered in the terminal. |

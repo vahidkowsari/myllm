@@ -13,6 +13,7 @@ Run this file directly once to download the corpus and print tokenizer stats:
 
     python data.py
 """
+import glob
 import json
 import os
 import urllib.request
@@ -23,13 +24,50 @@ import numpy as np
 from config import config
 
 
-def download_if_needed(path: str = config.data_path, url: str = config.data_url) -> str:
-    """Fetch the raw training text the first time, then read it from disk on later runs."""
+def build_corpus_from_dir(data_dir: str, pattern: str, out_path: str) -> str:
+    """
+    Concatenate every text file under `data_dir` matching `pattern` into one corpus file at
+    `out_path` (sorted for determinism, blank line between files), and return the text. This is
+    the "train on your own data" path: drop your .txt/.md files in a folder, point config.data_dir
+    at it, and the rest of the pipeline (tokenize -> cache -> train) is unchanged.
+    """
+    files = sorted(glob.glob(os.path.join(data_dir, pattern), recursive=True))
+    if not files:
+        raise FileNotFoundError(f"no files matching {pattern!r} under {data_dir!r}")
+    parts = []
+    for fp in files:
+        with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+            parts.append(f.read())
+    text = "\n\n".join(parts)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"built corpus from {len(files)} file(s) under {data_dir} -> {out_path} "
+          f"({len(text):,} chars)")
+    return text
+
+
+def read_corpus(path: str = config.data_path, url: str = config.data_url) -> str:
+    """
+    Get the raw training text. Priority:
+      1. config.data_dir set  -> (re)build the corpus from your local folder, then read it;
+      2. else if `path` exists -> read it (your own file, or a previous download/build);
+      3. else                  -> download `url` to `path` (the TinyStories demo) and read it.
+    """
+    if config.data_dir:
+        return build_corpus_from_dir(config.data_dir, config.data_glob, path)
     if not os.path.exists(path):
+        if not url:
+            raise FileNotFoundError(
+                f"no corpus at {path!r} and no data_url/data_dir set — "
+                f"point config.data_dir at a folder of text files, or drop a file at {path!r}.")
         print(f"downloading corpus -> {path}")
         urllib.request.urlretrieve(url, path)
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+# Backwards-compatible alias (older code / docs may call download_if_needed).
+download_if_needed = read_corpus
 
 
 class CharTokenizer:
@@ -131,7 +169,7 @@ def load_data():
     train/val are 1-D, disk-backed (memory-mapped) arrays of token ids — the entire corpus as
     integers, split 90/10. Training grabs random windows out of these (see get_batch).
     """
-    text = download_if_needed()
+    text = read_corpus()
     tokenizer = build_tokenizer(text)
     ids = load_tokens(text, tokenizer)        # np.memmap, 1-D — stays on disk until indexed
 

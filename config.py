@@ -109,6 +109,13 @@ class Config:
         "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/"
         "TinyStoriesV2-GPT4-valid.txt"
     )
+    # TRAIN ON YOUR OWN DATA: set data_dir to a folder and every text file under it (matching
+    # data_glob) is concatenated into one corpus at data_path — no URL needed. This is the easy
+    # path to a model that writes like *your* notes/code/docs. For real prose or code prefer the
+    # BPE tokenizer (tokenizer="bpe"); char-level wastes the context window on a big corpus. When
+    # data_dir is empty we fall back to data_url (the TinyStories demo).
+    data_dir: str = ""                  # e.g. "./mydata" — leave empty to use data_url
+    data_glob: str = "**/*.txt"         # which files under data_dir to include (recursive)
 
     # --- supervised fine-tuning (SFT / instruction tuning) ------------------
     # After pretraining (train.py), SFT teaches the base model to FOLLOW INSTRUCTIONS instead

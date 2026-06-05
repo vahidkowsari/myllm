@@ -125,6 +125,15 @@ cache is keyed by tokenizer + vocab size + corpus length and rebuilt automatical
 `get_batch` selects start positions with MLX's RNG (so `config.seed` still controls batching),
 gathers those windows from the memmap, and moves just that small batch onto the GPU as int32.
 
+### Training on your own data
+
+`read_corpus` (`data.py`) picks the source in priority order: **(1)** if `config.data_dir` is set,
+`build_corpus_from_dir` concatenates every text file under it matching `config.data_glob`
+(sorted, blank-line-separated) into `data_path`; **(2)** else an existing `data_path` is read as-is;
+**(3)** else `data_url` is downloaded (the TinyStories demo). Everything downstream (tokenize →
+memmap cache → train) is unchanged, so dropping `.txt` files in a folder is the whole workflow.
+Prefer `tokenizer="bpe"` for real prose/code — char-level wastes the context window on a big corpus.
+
 ### Serialization
 
 Both tokenizers expose `to_meta()` (serialize) and `from_meta()` (rebuild), and
@@ -435,6 +444,17 @@ generated — confident stretches go deterministic, vague ones loosen up.
 `sample.py -i` uses it to print characters live while the KV cache is reused internally — one
 forward step per character instead of re-reading the prompt each time. (With BPE, a token that is
 a partial multibyte UTF-8 sequence renders as `�` mid-stream; harmless for ASCII corpora.)
+
+### Serving over HTTP (`serve.py`)
+
+`serve.py` wraps a checkpoint in a standard-library HTTP server (no extra deps) so other programs
+can call the model. `GET /` returns usage/info; `POST /complete` takes `{"prompt", "max_tokens",
+"temperature", "top_k", "top_p", "repetition_penalty", "entropy", "chat", "stream"}` — per-request
+overrides of the server defaults. With `"stream": true` it replies as **Server-Sent Events**, one
+`data: {"text": "..."}` line per token (driven by the same `on_token` callback) ending in
+`data: [DONE]`; otherwise it returns the full text as JSON. It reuses `sample.load_model` (so
+`--quantize` and `--chat` work) and is **single-threaded on purpose**: MLX binds its GPU stream to
+the thread that built the model, so generation runs on the main thread, one request at a time.
 
 ---
 
