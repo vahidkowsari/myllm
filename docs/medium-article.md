@@ -12,7 +12,7 @@ For a long time, I could *talk* about how language models work. I knew the vocab
 
 That gap is normal, and it isn't your fault. The code most of us learn from hides the very thing we want to see. In a production library, attention is a single function call with a name like `scaled_dot_product_attention`, and all the arithmetic we came to understand is sealed inside it. You can use the model, but you can't *watch* it think.
 
-So I wrote a small one whose only job is to be watchable. It's called **`myllm`**, and the idea is simple: a complete, modern GPT, written out plainly, with a comment on nearly every line, small enough that you can read the whole thing in an afternoon and train it on a MacBook in a few minutes. If you've seen Andrej Karpathy's nanoGPT, it's a cousin of that, built for understanding rather than speed.
+So I wrote a small one whose only job is to be watchable. It's called **[`myllm`](https://github.com/vahidkowsari/myllm)** (the code is on GitHub), and the idea is simple: a complete, modern GPT, written out plainly, with a comment on nearly every line, small enough that you can read the whole thing in an afternoon and train it on a MacBook in a few minutes. If you've seen Andrej Karpathy's nanoGPT, it's a cousin of that, built for understanding rather than speed.
 
 In this article, we're going to do something specific together. We'll pick a single character and follow it all the way down through the model and back up again. By the end, you'll be able to tell that story yourself.
 
@@ -260,7 +260,7 @@ Because small is the only size you can actually hold in your head, and the enorm
 So here is my invitation. If you've ever wanted to stop reciting the words and actually *watch* a character become a number, become a meaning, become a prediction, and finally a lesson the model learns from, clone the code, open the model file, and read it from top to bottom. The comments will walk beside you the rest of the way.
 
 ```bash
-git clone <your-repo-url> && cd myllm
+git clone https://github.com/vahidkowsari/myllm && cd myllm
 ./setup.sh && source .venv/bin/activate
 python data.py && python train.py
 python sample.py -i
