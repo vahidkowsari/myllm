@@ -1,0 +1,3 @@
+# The entire dependency list. We deliberately keep it tiny.
+mlx>=0.20      # Apple's array framework — runs natively on Apple-Silicon GPU
+numpy          # mlx uses it for some conversions; also handy for inspecting arrays

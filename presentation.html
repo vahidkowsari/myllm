@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>How myllm Works — an LLM, explained simply</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" id="theme">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css">
+
+  <style>
+    :root{
+      --bg0:#070a10;
+      --bg1:#0b1018;
+      --ink:#eef3fb;
+      --ink-dim:#9aa9be;
+      --ink-faint:#64748b;
+
+      --accent:#6ea8fe;      /* primary blue   */
+      --accent-2:#ffcf6e;    /* warm gold      */
+      --accent-3:#7be0b0;    /* mint           */
+      --accent-4:#f49ac2;    /* pink           */
+      --accent-5:#b79cff;    /* violet         */
+
+      --glass:rgba(255,255,255,.045);
+      --glass-2:rgba(255,255,255,.07);
+      --stroke:rgba(255,255,255,.10);
+      --stroke-strong:rgba(255,255,255,.18);
+      --shadow:0 18px 50px -22px rgba(0,0,0,.85), 0 2px 8px -2px rgba(0,0,0,.5);
+      --radius:18px;
+    }
+
+    html,body{background:var(--bg0)}
+
+    .reveal{
+      font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      color:var(--ink);
+      font-weight:400;
+      letter-spacing:.005em;
+    }
+
+    /* ---------- ambient background ---------- */
+    .reveal .slides{ }
+    .bg-aura{
+      position:fixed; inset:0; z-index:0; pointer-events:none;
+      background:
+        radial-gradient(1100px 620px at 82% -12%, rgba(110,168,254,.20), transparent 58%),
+        radial-gradient(950px 560px at -8% 112%, rgba(183,156,255,.16), transparent 60%),
+        radial-gradient(800px 600px at 110% 90%, rgba(244,154,194,.10), transparent 60%),
+        linear-gradient(160deg,#070a10 0%,#0a0f18 55%,#0c0a14 100%);
+    }
+    .bg-grid{
+      position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.5;
+      background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+      background-size:54px 54px;
+      mask-image:radial-gradient(ellipse 90% 80% at 50% 40%,#000 55%,transparent 100%);
+    }
+    .bg-grain{
+      position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.035; mix-blend-mode:overlay;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+
+    /* ---------- typography ---------- */
+    .reveal h1,.reveal h2,.reveal h3,.reveal h4{
+      font-family:"Sora",sans-serif; font-weight:700;
+      letter-spacing:-.025em; text-transform:none; color:#fff; margin:0;
+    }
+    .reveal h1{ font-size:2.7em; line-height:1.02 }
+    .reveal h2{ font-size:1.5em; line-height:1.1; margin-bottom:.18em }
+    .reveal h3{ font-size:1.05em; color:var(--accent); margin-bottom:.15em }
+    .reveal section{ text-align:left }
+    .reveal p{ line-height:1.5 }
+    .reveal .center{ text-align:center }
+    .reveal em{ color:var(--accent-2); font-style:normal; font-weight:600 }
+    .reveal strong{ color:#fff; font-weight:600 }
+    .muted{ color:var(--ink-dim) }
+    .faint{ color:var(--ink-faint) }
+    .small{ font-size:.72em }
+    .tiny{ font-size:.58em }
+
+    /* slide eyebrow / section header */
+    .eyebrow{
+      display:flex; align-items:center; gap:.6em;
+      font-family:"JetBrains Mono",monospace; font-size:.5em; font-weight:500;
+      letter-spacing:.22em; text-transform:uppercase; color:var(--accent);
+      margin-bottom:.5em;
+    }
+    .eyebrow::before{
+      content:""; width:26px; height:2px; border-radius:2px;
+      background:linear-gradient(90deg,var(--accent),transparent);
+    }
+    .eyebrow .num{
+      color:var(--ink-faint); font-weight:600;
+    }
+    h2 .hl{ color:var(--accent) }
+
+    /* ---------- chips ---------- */
+    .chip{
+      display:inline-flex; align-items:center; gap:.4em;
+      padding:.32em .8em; border-radius:999px;
+      background:var(--glass); border:1px solid var(--stroke-strong);
+      font-family:"JetBrains Mono",monospace; font-size:.52em; font-weight:500;
+      color:var(--ink-dim); letter-spacing:.06em;
+    }
+    .chip .dot{ width:6px;height:6px;border-radius:50%;background:var(--accent-3);
+      box-shadow:0 0 10px var(--accent-3) }
+
+    /* ---------- cards ---------- */
+    .card{
+      position:relative; background:var(--glass); border:1px solid var(--stroke);
+      border-radius:var(--radius); padding:.85em 1.05em; box-shadow:var(--shadow);
+      backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    }
+    .card.accent{ border-color:rgba(110,168,254,.4);
+      background:linear-gradient(180deg,rgba(110,168,254,.10),rgba(110,168,254,.02)) }
+    .card.mint{ border-color:rgba(123,224,176,.38);
+      background:linear-gradient(180deg,rgba(123,224,176,.10),transparent) }
+    .card.gold{ border-color:rgba(255,207,110,.38);
+      background:linear-gradient(180deg,rgba(255,207,110,.10),transparent) }
+    .card .ico{ font-size:1.1em; margin-bottom:.1em; display:block }
+
+    .grid{ display:grid; gap:.7em }
+    .g2{ grid-template-columns:1fr 1fr }
+    .g3{ grid-template-columns:repeat(3,1fr) }
+    .g4{ grid-template-columns:repeat(4,1fr) }
+    .center-y{ align-items:center }
+
+    /* ---------- pipeline / flow ---------- */
+    .flow{ display:flex; flex-direction:column; gap:.32em; font-size:.7em }
+    .stage{
+      position:relative; display:flex; justify-content:space-between; align-items:center; gap:1em;
+      border:1px solid var(--stroke); border-radius:14px; padding:.62em .95em;
+      background:var(--glass); box-shadow:var(--shadow);
+      transition:transform .25s ease, border-color .25s ease;
+    }
+    .stage::before{
+      content:""; position:absolute; left:0; top:14%; bottom:14%; width:3px; border-radius:3px;
+      background:var(--accent);
+    }
+    .stage.s1::before{background:var(--accent)} .stage.s2::before{background:var(--accent-5)}
+    .stage.s3::before{background:var(--accent-3)} .stage.s4::before{background:var(--accent-2)}
+    .stage.s5::before{background:var(--accent-4)} .stage.s6::before{background:#6ee7ff}
+    .stage.hero{ border-color:rgba(110,168,254,.45);
+      background:linear-gradient(120deg,rgba(110,168,254,.12),rgba(183,156,255,.06)) }
+    .stage .lab{ font-weight:600; color:#fff; font-family:"Sora",sans-serif }
+    .stage .desc{ color:var(--ink-dim); font-size:.86em; text-align:right }
+    .arrow{ text-align:center; color:var(--ink-faint); font-size:.85em; line-height:.4; margin:-.05em 0 }
+
+    /* ---------- tokens ---------- */
+    .tokens{ display:flex; flex-wrap:wrap; gap:.42em; font-family:"JetBrains Mono",monospace }
+    .tok{
+      display:flex; flex-direction:column; align-items:center; line-height:1.05;
+      background:linear-gradient(180deg,rgba(110,168,254,.18),rgba(110,168,254,.06));
+      border:1px solid rgba(110,168,254,.42); border-radius:11px; padding:.32em .5em;
+      box-shadow:0 6px 18px -10px rgba(110,168,254,.6);
+    }
+    .tok .ch{ font-size:.95em; color:#fff; font-weight:600 }
+    .tok .id{ color:var(--accent-2); font-size:.62em; margin-top:.12em }
+
+    /* ---------- code ---------- */
+    .reveal pre{
+      box-shadow:var(--shadow); width:100%; margin:.3em 0;
+      border-radius:14px; border:1px solid var(--stroke); overflow:hidden; background:#0a0e16;
+    }
+    .reveal pre code{
+      font-family:"JetBrains Mono",monospace; font-size:.92em; padding:1em 1.1em;
+      background:#0a0e16; max-height:none; line-height:1.5;
+    }
+    .reveal pre::before{
+      content:"●  ●  ●"; display:block; padding:.5em .9em .1em;
+      color:rgba(255,255,255,.18); font-size:.6em; letter-spacing:.25em;
+    }
+    code.inline{
+      font-family:"JetBrains Mono",monospace; background:var(--glass-2);
+      border:1px solid var(--stroke); border-radius:7px; padding:.06em .4em;
+      color:var(--accent-3); font-size:.85em;
+    }
+
+    /* ---------- KPI ---------- */
+    .kpi{ display:flex; gap:.7em; justify-content:center; flex-wrap:wrap }
+    .kpi .item{
+      flex:1 1 0; min-width:120px; text-align:center; padding:.7em .5em;
+      background:var(--glass); border:1px solid var(--stroke); border-radius:16px;
+      box-shadow:var(--shadow);
+    }
+    .kpi .n{
+      font-family:"Sora",sans-serif; font-size:1.9em; font-weight:800; line-height:1;
+      background:linear-gradient(180deg,#fff,var(--accent-2));
+      -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+    }
+    .kpi .l{ font-size:.5em; color:var(--ink-dim); text-transform:uppercase;
+      letter-spacing:.12em; margin-top:.5em }
+
+    /* ---------- QKV cards ---------- */
+    .qkv{ text-align:center }
+    .qkv h3{ font-size:1.2em; margin-bottom:.1em }
+    .qkv .q{ color:var(--accent) } .qkv .k{ color:var(--accent-2) } .qkv .v{ color:var(--accent-3) }
+
+    /* ---------- tables ---------- */
+    table.mini{ font-size:.62em; border-collapse:separate; border-spacing:0; width:100%;
+      border-radius:12px; overflow:hidden; box-shadow:var(--shadow) }
+    table.mini td,table.mini th{ border-bottom:1px solid var(--stroke); padding:.42em .65em }
+    table.mini tr:last-child td{ border-bottom:none }
+    table.mini th{ color:var(--accent); background:var(--glass-2); font-family:"Sora",sans-serif;
+      font-weight:600; text-align:left }
+
+    /* heatmap */
+    .heat{ border-collapse:separate; border-spacing:3px }
+    .heat td,.heat th{ font-family:"JetBrains Mono",monospace; text-align:center; font-size:.72em;
+      width:34px; height:30px; border:none; border-radius:6px; color:#0a0e16; font-weight:600 }
+    .heat th{ background:transparent; color:var(--ink-dim); font-weight:500 }
+    .heat td.empty{ background:rgba(255,255,255,.03); color:var(--ink-faint) }
+
+    /* footnote */
+    .footnote{
+      position:absolute; bottom:.7em; left:0; right:0; text-align:center;
+      font-family:"JetBrains Mono",monospace; font-size:.42em; color:var(--ink-faint);
+      letter-spacing:.04em;
+    }
+    .stepnum{
+      display:inline-flex; align-items:center; justify-content:center;
+      width:1.5em; height:1.5em; border-radius:9px; margin-right:.45em;
+      background:linear-gradient(180deg,var(--accent),#4f7fe0); color:#06101f;
+      font-family:"Sora",sans-serif; font-weight:800; font-size:.7em; vertical-align:.12em;
+      box-shadow:0 6px 16px -6px rgba(110,168,254,.8);
+    }
+
+    ul{ margin-left:.2em }
+    ul li{ margin:.3em 0; line-height:1.45 }
+
+    /* progress + controls recolor */
+    .reveal .progress{ height:3px; color:var(--accent) }
+    .reveal .progress span{ background:linear-gradient(90deg,var(--accent),var(--accent-5)) }
+    .reveal .controls{ color:var(--accent) }
+    .reveal .slide-number{ background:transparent; color:var(--ink-faint);
+      font-family:"JetBrains Mono",monospace; font-size:.6em }
+
+    /* fragment polish */
+    .reveal .fragment.fade-up{ transform:translateY(14px); opacity:0; transition:all .4s ease }
+    .reveal .fragment.fade-up.visible{ transform:none; opacity:1 }
+
+    .lead{ font-size:1.05em; line-height:1.55 }
+    .divider{ height:1px;background:linear-gradient(90deg,transparent,var(--stroke-strong),transparent);
+      margin:.5em 0 }
+  </style>
+</head>
+<body>
+<div class="bg-aura"></div>
+<div class="bg-grid"></div>
+<div class="bg-grain"></div>
+
+<div class="reveal">
+<div class="slides">
+
+<!-- 1 — TITLE -->
+<section data-background-color="#070a10">
+  <div class="center">
+    <span class="chip"><span class="dot"></span> educational &nbsp;·&nbsp; Apple MLX &nbsp;·&nbsp; ~2.7M params</span>
+    <h1 style="margin-top:.35em">How <span style="background:linear-gradient(120deg,#6ea8fe,#b79cff);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">myllm</span> works</h1>
+    <h3 style="color:var(--accent-2);font-size:1.25em;margin-top:.35em;font-weight:500">A whole language model, explained in plain terms</h3>
+    <p class="muted" style="margin-top:1.1em;line-height:1.6">
+      A tiny GPT that learns to write Shakespeare<br><span class="faint">one character at a time.</span>
+    </p>
+    <p class="tiny faint" style="margin-top:2.2em;font-family:'JetBrains Mono',monospace;letter-spacing:.1em">
+      ↓ / SPACE advance &nbsp;·&nbsp; ESC overview &nbsp;·&nbsp; F fullscreen
+    </p>
+  </div>
+</section>
+
+<!-- 2 — THE ONE IDEA -->
+<section>
+  <div class="eyebrow"><span class="num">01</span> the core idea</div>
+  <h2>The whole thing is <span class="hl">one idea</span></h2>
+  <div class="card accent center" style="font-size:1.35em;padding:1.1em;margin:.5em 0">
+    Given some text, <em>guess the next character.</em>
+  </div>
+  <div class="grid g2">
+    <div class="card fragment fade-up">
+      <span class="ico">🔁</span><h3>That's literally it</h3>
+      <p class="small muted">Show it <code class="inline">"To be or not to b"</code> → it predicts
+      <code class="inline">"e"</code>. Repeat that forever and it writes whole plays.</p>
+    </div>
+    <div class="card fragment fade-up">
+      <span class="ico">⚖️</span><h3>Two phases</h3>
+      <p class="small muted"><strong>Train</strong> — practice guessing on real text until it's good.<br>
+      <strong>Sample</strong> — let it guess, append, repeat → new text.</p>
+    </div>
+  </div>
+  <p class="center muted small" style="margin-top:.6em">Everything else is just <em>how</em> it makes that guess well.</p>
+</section>
+
+<!-- 3 — THE PIPELINE -->
+<section>
+  <div class="eyebrow"><span class="num">02</span> the big picture</div>
+  <h2>The journey of a <span class="hl">prediction</span></h2>
+  <div class="flow">
+    <div class="stage s1"><span class="lab">📝 &nbsp;Text</span><span class="desc">"ROMEO:"</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage s2"><span class="lab">🔢 &nbsp;Tokenizer</span><span class="desc">characters → numbers (ids)</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage s3"><span class="lab">🎯 &nbsp;Embedding</span><span class="desc">each id → a vector of meaning</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage hero"><span class="lab">🧠 &nbsp;6 × Transformer Blocks</span><span class="desc">tokens look at each other &amp; think</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage s5"><span class="lab">📊 &nbsp;LM head</span><span class="desc">a score for every possible next char</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage s6"><span class="lab">🎲 &nbsp;Pick one</span><span class="desc">sample the next character</span></div>
+  </div>
+  <div class="footnote">model.py — the forward pass</div>
+</section>
+
+<!-- 4 — TOKENIZER -->
+<section>
+  <div class="eyebrow"><span class="num">03</span> step one</div>
+  <h2><span class="stepnum">1</span>Tokenizer — <span class="hl">text becomes numbers</span></h2>
+  <p class="small muted">The model never sees letters — it only does math on integers. So first we swap every character for an id.</p>
+  <div class="tokens center" style="justify-content:center;margin:.7em 0">
+    <span class="tok"><span class="ch">R</span><span class="id">30</span></span>
+    <span class="tok"><span class="ch">O</span><span class="id">27</span></span>
+    <span class="tok"><span class="ch">M</span><span class="id">25</span></span>
+    <span class="tok"><span class="ch">E</span><span class="id">17</span></span>
+    <span class="tok"><span class="ch">O</span><span class="id">27</span></span>
+    <span class="tok"><span class="ch">:</span><span class="id">10</span></span>
+  </div>
+  <div class="grid g2">
+    <div class="card"><h3>Char-level <span class="faint small">(default)</span></h3>
+      <p class="small muted">Vocabulary = the <em>sorted set of unique characters</em> in the text — about <strong>65</strong> for Shakespeare. Zero magic.</p></div>
+    <div class="card"><h3>BPE <span class="faint small">(optional)</span></h3>
+      <p class="small muted">Glues common chunks like <code class="inline">the</code>, <code class="inline">ing</code> into single tokens, so one token covers several letters.</p></div>
+  </div>
+  <div class="footnote">data.py · bpe.py</div>
+</section>
+
+<!-- 5 — EMBEDDING -->
+<section>
+  <div class="eyebrow"><span class="num">04</span> step two</div>
+  <h2><span class="stepnum">2</span>Embedding — <span class="hl">numbers become meaning</span></h2>
+  <div class="grid g2 center-y">
+    <div>
+      <p class="small muted">An id like <code class="inline">27</code> is just a label — it carries no meaning.
+      So we look it up in a <em>learned table</em> and get a list of
+      <strong>192 numbers</strong>: the token's coordinates in "meaning space."</p>
+      <p class="small muted">Vowels drift near vowels, punctuation near punctuation — the model
+      <em>learns</em> this layout during training.</p>
+      <div class="card gold small" style="margin-top:.3em">
+        <strong>Width = 192</strong> &nbsp;<code class="inline">n_embd</code><br>
+        <span class="muted">every vector in the model lives in this many dimensions</span>
+      </div>
+    </div>
+    <div>
+      <pre><code data-trim data-noescape class="language-python">
+# a lookup table: id -> 192-dim vector
+token_emb = nn.Embedding(vocab, 192)
+
+x = token_emb(idx)   # (B, T, 192)
+# B = batch · T = #tokens · C = width
+      </code></pre>
+      <p class="tiny faint center">No position table here —<br>position is added later, cleverly, inside attention.</p>
+    </div>
+  </div>
+  <div class="footnote">model.py · GPT.token_emb</div>
+</section>
+
+<!-- 6 — BLOCK overview -->
+<section>
+  <div class="eyebrow"><span class="num">05</span> step three · the heart</div>
+  <h2><span class="stepnum">3</span>The Transformer Block — <span class="hl">done 6 times</span></h2>
+  <p class="small muted">Two moves per block. Stack six and the model gets six rounds of "look around, then think."</p>
+  <div class="grid g2">
+    <div class="card accent">
+      <span class="ico">👀</span><h3>① Attention — <em>look around</em></h3>
+      <p class="small muted">Every token gathers information from the earlier tokens that matter to it. This is how context flows.</p>
+    </div>
+    <div class="card mint">
+      <span class="ico">💭</span><h3>② Feed-forward — <em>think</em></h3>
+      <p class="small muted">Each token, on its own, digests what it just gathered.</p>
+    </div>
+  </div>
+  <pre style="margin-top:.45em"><code data-trim data-noescape class="language-python">
+x = x + attention(rmsnorm(x))     # look around
+x = x + feedforward(rmsnorm(x))   # think
+  </code></pre>
+  <p class="tiny faint center">The <code class="inline">x +</code> is a <em>residual</em>: keep the original, add the new insight. It's what lets you stack many layers.</p>
+  <div class="footnote">model.py · Block</div>
+</section>
+
+<!-- 7 — ATTENTION intuition -->
+<section>
+  <div class="eyebrow"><span class="num">06</span> attention</div>
+  <h2>Attention, in <span class="hl">one sentence</span></h2>
+  <div class="card center" style="font-size:1.1em;padding:1em;margin:.3em 0">
+    Each token asks a <span style="color:var(--accent)">question</span>, every other token offers a
+    <span style="color:var(--accent-2)">label</span>,<br>and you blend the
+    <span style="color:var(--accent-3)">answers</span> from whoever matches best.
+  </div>
+  <div class="grid g3">
+    <div class="card qkv fragment fade-up"><h3 class="q">Query</h3><p class="small muted">"what am I looking for?"</p></div>
+    <div class="card qkv fragment fade-up"><h3 class="k">Key</h3><p class="small muted">"what do I offer?"</p></div>
+    <div class="card qkv fragment fade-up"><h3 class="v">Value</h3><p class="small muted">"what I pass on if picked"</p></div>
+  </div>
+  <pre style="margin-top:.45em"><code data-trim data-noescape class="language-python">
+attention = softmax( Q · Kᵀ / √head_dim )   # who to listen to
+output    = attention · V                    # the blended answer
+  </code></pre>
+  <div class="footnote">model.py · CausalSelfAttention — written out longhand on purpose</div>
+</section>
+
+<!-- 8 — Causal heatmap -->
+<section>
+  <div class="eyebrow"><span class="num">07</span> attention · the rule</div>
+  <h2>"Causal": you can't <span class="hl">peek at the future</span></h2>
+  <p class="small muted">Predicting the next char, a token may only look at itself and what came <em>before</em>. The upper triangle is blocked.</p>
+  <div class="grid" style="grid-template-columns:1.05fr .95fr;align-items:center">
+    <div class="center">
+      <table class="heat center" style="margin:auto">
+        <tr><th></th><th>R</th><th>O</th><th>M</th><th>E</th><th>O</th></tr>
+        <tr><th>R</th><td style="background:#6ea8fe">1.0</td><td class="empty">·</td><td class="empty">·</td><td class="empty">·</td><td class="empty">·</td></tr>
+        <tr><th>O</th><td style="background:#9ec5fe">.4</td><td style="background:#7eb0fe">.6</td><td class="empty">·</td><td class="empty">·</td><td class="empty">·</td></tr>
+        <tr><th>M</th><td style="background:#c4dafe">.2</td><td style="background:#b6d2fe">.3</td><td style="background:#8fbafe">.5</td><td class="empty">·</td><td class="empty">·</td></tr>
+        <tr><th>E</th><td style="background:#d6e6fe">.1</td><td style="background:#c4dafe">.2</td><td style="background:#b6d2fe">.3</td><td style="background:#9ec5fe">.4</td><td class="empty">·</td></tr>
+        <tr><th>O</th><td style="background:#d6e6fe">.1</td><td style="background:#b6d2fe">.3</td><td style="background:#c4dafe">.2</td><td style="background:#c4dafe">.2</td><td style="background:#bdd5fe">.2</td></tr>
+      </table>
+      <p class="tiny faint" style="margin-top:.5em">rows = the token asking &nbsp;·&nbsp; columns = who it listens to</p>
+    </div>
+    <div>
+      <div class="card small fragment fade-up"><strong>Multi-head:</strong> we run this 6× in parallel
+        (<code class="inline">n_head=6</code>), so different heads track different things — grammar, quotes, names.</div>
+      <div class="card small fragment fade-up"><strong>GQA &amp; KV-cache</strong> make this cheaper at inference — see the speed slide.</div>
+    </div>
+  </div>
+  <div class="footnote">model.py · the causal mask = lower-triangular</div>
+</section>
+
+<!-- 9 — RoPE -->
+<section>
+  <div class="eyebrow"><span class="num">08</span> position</div>
+  <h2>Where does <span class="hl">position</span> come from? RoPE</h2>
+  <p class="small muted">Attention is order-blind — shuffle the tokens and the math is identical. Something must encode "1st, 2nd, 3rd…".</p>
+  <div class="grid g2">
+    <div class="card"><span class="ico">🧭</span><h3>The trick: rotate</h3>
+      <p class="small muted">Spin each token's Query &amp; Key vectors by an angle set by its position — like clock hands. Token 5 rotates more than token 2.</p></div>
+    <div class="card"><span class="ico">✨</span><h3>Why it's clever</h3>
+      <p class="small muted">When two vectors are compared, the result depends only on the <em>difference</em> in angles → the model feels <strong>relative distance</strong> for free.</p></div>
+  </div>
+  <div class="card gold small center" style="margin-top:.5em">
+    No learned position table at all — position is "baked in" by geometry.
+  </div>
+  <div class="footnote">model.py · rope_tables · apply_rope &nbsp;|&nbsp; RoPE · RMSNorm · SwiGLU = the "2024-era" upgrades over GPT-2</div>
+</section>
+
+<!-- 10 — SwiGLU -->
+<section>
+  <div class="eyebrow"><span class="num">09</span> step three · part b</div>
+  <h2><span class="stepnum">3</span>Feed-forward — <span class="hl">each token thinks</span></h2>
+  <p class="small muted">After attention shares info <em>between</em> tokens, the feed-forward processes each token <em>on its own</em>.</p>
+  <div class="grid g2 center-y">
+    <div>
+      <p class="small muted">A <strong>SwiGLU</strong>: one branch does the thinking, a second branch is a
+      <em>gate</em> deciding how much of each signal to let through.</p>
+      <pre><code data-trim data-noescape class="language-python">
+hidden = silu(gate(x)) * up(x)  # gated
+out    = down(hidden)
+      </code></pre>
+    </div>
+    <div class="card mint small">
+      <strong>Analogy:</strong> the <span style="color:var(--accent-3)">gate</span> is a dimmer switch
+      per idea — turn up what's relevant, dim what isn't, for this specific token.
+      <div class="divider"></div>
+      <span class="muted">Flip <code class="inline">use_moe=True</code> and this becomes a
+      <em>Mixture of Experts</em>: many feed-forwards + a router that picks 2 per token.</span>
+    </div>
+  </div>
+  <div class="footnote">model.py · MLP (SwiGLU) · MoE</div>
+</section>
+
+<!-- 11 — Output -->
+<section>
+  <div class="eyebrow"><span class="num">10</span> step four</div>
+  <h2><span class="stepnum">4</span>Output — <span class="hl">a score for every character</span></h2>
+  <p class="small muted">After the 6 blocks, each position holds a rich vector. We turn it back into a <em>guess</em>: one score per possible next char.</p>
+  <div class="grid g2 center-y">
+    <div>
+      <p class="small muted"><strong>Softmax</strong> turns scores into probabilities:</p>
+      <table class="mini">
+        <tr><th>next char</th><th>probability</th></tr>
+        <tr><td><code class="inline">e</code></td><td><span style="color:var(--accent-3)">████████</span> 62%</td></tr>
+        <tr><td><code class="inline">a</code></td><td><span style="color:var(--accent)">███</span> 18%</td></tr>
+        <tr><td><code class="inline">o</code></td><td><span style="color:var(--accent-5)">█</span> 9%</td></tr>
+        <tr><td class="faint">…</td><td class="faint">…</td></tr>
+      </table>
+    </div>
+    <div class="card accent small">
+      <span class="ico">🔗</span><strong>Weight tying</strong>
+      <p class="muted" style="margin-top:.2em">The same embedding table that mapped <em>id → vector</em> on the way
+      in is reused to map <em>vector → scores</em> on the way out. One matrix, two jobs — fewer parameters.</p>
+    </div>
+  </div>
+  <div class="footnote">model.py · token_emb.as_linear(x)</div>
+</section>
+
+<!-- 12 — Training -->
+<section>
+  <div class="eyebrow"><span class="num">11</span> learning</div>
+  <h2>Training — <span class="hl">how it gets good at guessing</span></h2>
+  <div class="flow" style="font-size:.72em;max-width:780px;margin:.2em auto 0">
+    <div class="stage s1"><span class="lab">1 · Grab text</span><span class="desc">random windows; target = input shifted by one</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage s2"><span class="lab">2 · Guess</span><span class="desc">predict the next char at every position</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage s3"><span class="lab">3 · Measure surprise</span><span class="desc">cross-entropy loss vs. the true char</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage s5"><span class="lab">4 · Nudge weights</span><span class="desc">backprop + AdamW lower the loss a little</span></div>
+    <div class="arrow">▼</div>
+    <div class="stage hero"><span class="lab">↻ Repeat 5,000×</span><span class="desc">~7 minutes on a laptop GPU</span></div>
+  </div>
+  <p class="tiny faint center" style="margin-top:.5em">
+    The only supervision is that one-token shift: "predict what actually came next." That alone teaches grammar, names, and style.
+  </p>
+  <div class="footnote">train.py · warmup→cosine LR · mx.compile · selective weight decay</div>
+</section>
+
+<!-- 13 — Sampling -->
+<section>
+  <div class="eyebrow"><span class="num">12</span> generation</div>
+  <h2>Sampling — <span class="hl">putting it to work</span></h2>
+  <p class="small muted">Generation is a loop: predict → pick one → append → predict again. These dials shape the picks:</p>
+  <div class="grid g4">
+    <div class="card small center"><strong>Temperature</strong><br><span class="faint">bold vs. safe</span></div>
+    <div class="card small center"><strong>Top-k</strong><br><span class="faint">k best only</span></div>
+    <div class="card small center"><strong>Top-p</strong><br><span class="faint">cover p% of prob</span></div>
+    <div class="card small center"><strong>Rep. penalty</strong><br><span class="faint">avoid loops</span></div>
+  </div>
+  <div class="card accent" style="margin-top:.5em">
+    <span class="ico">⚡</span><h3>The KV cache — the speed trick</h3>
+    <p class="small muted">Each layer <em>remembers</em> the Keys/Values it already computed, so generating a new
+    character costs one step over <strong>one</strong> token — not a re-read of the whole context every time.</p>
+  </div>
+  <div class="footnote">model.py · GPT.generate &nbsp;|&nbsp; sample.py --prompt "ROMEO:" / -i</div>
+</section>
+
+<!-- 14 — Numbers -->
+<section>
+  <div class="eyebrow"><span class="num">13</span> scale</div>
+  <h2>The model, <span class="hl">by the numbers</span></h2>
+  <div class="kpi" style="margin-top:.3em">
+    <div class="item"><div class="n">2.7M</div><div class="l">parameters</div></div>
+    <div class="item"><div class="n">6</div><div class="l">layers</div></div>
+    <div class="item"><div class="n">6</div><div class="l">heads</div></div>
+    <div class="item"><div class="n">192</div><div class="l">width</div></div>
+    <div class="item"><div class="n">128</div><div class="l">context</div></div>
+    <div class="item"><div class="n">~65</div><div class="l">vocab</div></div>
+  </div>
+  <div class="card center" style="margin-top:.8em">
+    <p class="small">Same architecture as <strong>Llama / Mistral</strong> —
+    <em>RoPE, RMSNorm, SwiGLU, KV-cache, optional GQA &amp; MoE</em> — just shrunk
+    ~600,000× so it fits on a laptop and you can read every line.</p>
+  </div>
+  <p class="muted small center" style="margin-top:.5em">Scale these numbers up and you get a frontier model. That trade-off <em>is</em> the whole story of LLMs.</p>
+  <div class="footnote">config.py</div>
+</section>
+
+<!-- 15 — Recap -->
+<section data-background-color="#070a10">
+  <div class="center"><div class="eyebrow" style="justify-content:center"><span class="num">14</span> recap</div></div>
+  <h2 class="center">The whole model in <span class="hl">six steps</span></h2>
+  <div class="grid g3" style="font-size:.7em;margin-top:.5em">
+    <div class="card"><span class="stepnum">1</span><strong>Tokenize</strong><br><span class="muted small">text → numbers</span></div>
+    <div class="card"><span class="stepnum">2</span><strong>Embed</strong><br><span class="muted small">numbers → meaning vectors</span></div>
+    <div class="card"><span class="stepnum">3</span><strong>Attention</strong><br><span class="muted small">tokens look at each other</span></div>
+    <div class="card"><span class="stepnum">4</span><strong>Feed-forward</strong><br><span class="muted small">each token thinks</span></div>
+    <div class="card"><span class="stepnum">5</span><strong>Score</strong><br><span class="muted small">probability for next char</span></div>
+    <div class="card"><span class="stepnum">6</span><strong>Sample &amp; repeat</strong><br><span class="muted small">write new text</span></div>
+  </div>
+  <div class="center" style="margin-top:1.1em">
+    <p class="small muted">All of it, just to do one thing really well:</p>
+    <h3 style="font-size:1.7em;background:linear-gradient(120deg,#ffcf6e,#f49ac2);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">guess the next character.</h3>
+    <p class="tiny faint" style="margin-top:1.3em;font-family:'JetBrains Mono',monospace">
+      read in order: data.py → model.py → train.py → sample.py &nbsp;·&nbsp; full reference: ARCHITECTURE.md
+    </p>
+  </div>
+</section>
+
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+<script>
+  Reveal.initialize({
+    hash:true,
+    transition:'slide',
+    transitionSpeed:'default',
+    backgroundTransition:'fade',
+    width:1240,
+    height:740,
+    margin:0.055,
+    controls:true,
+    controlsTutorial:false,
+    progress:true,
+    slideNumber:'c/t',
+    hideInactiveCursor:true,
+    plugins:[ RevealHighlight, RevealNotes ]
+  });
+</script>
+</body>
+</html>

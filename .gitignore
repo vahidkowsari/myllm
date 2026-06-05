@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+shakespeare.txt
+ckpt.pt
+ckpt.npz
+ckpt.json
+
+# downloadable training corpus (re-fetched by data.py)
+tinystories.txt
