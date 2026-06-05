@@ -234,6 +234,11 @@ class MLP(nn.Module):
     def __init__(self, cfg: Config):
         super().__init__()
         hidden = int(8 * cfg.n_embd / 3)        # e.g. n_embd=192 -> 512; ~ a 4x MLP's param count
+        # Round the hidden width UP to a multiple of 64. Real models do this (Llama rounds to a
+        # multiple of 256) for two reasons: nicer GPU tiling, and — relevant here — 4-bit
+        # quantization (sample.py --quantize) requires each matrix's last dim to be divisible by
+        # the quantization group size (64). At the default n_embd=192 this is a no-op (512 already).
+        hidden = ((hidden + 63) // 64) * 64
         self.gate = nn.Linear(cfg.n_embd, hidden)   # the branch that gets the nonlinearity
         self.up = nn.Linear(cfg.n_embd, hidden)     # the branch that gates it
         self.down = nn.Linear(hidden, cfg.n_embd)   # back down to model width
@@ -419,7 +424,15 @@ class GPT(nn.Module):
         new_caches = []
         aux_total = mx.array(0.0)                          # accumulates MoE load-balancing loss
         for block, cache in zip(self.blocks, caches):      # the deep stack of reasoning
-            x, cache, aux = block(x, cache)
+            if self.cfg.use_grad_checkpoint and self.training:
+                # Gradient checkpointing: don't keep this block's internal activations around for
+                # the backward pass — recompute them on the fly instead. Trades extra compute for
+                # much less memory, which is what lets a deeper/wider model fit on the laptop.
+                # `nn.utils.checkpoint` (not bare `mx.checkpoint`) so grads still reach the block's
+                # parameters. Only worthwhile while training; at inference there is no backward.
+                x, cache, aux = nn.utils.checkpoint(block)(x, cache)
+            else:
+                x, cache, aux = block(x, cache)
             new_caches.append(cache)
             aux_total = aux_total + aux
         x = self.ln_f(x)
@@ -429,9 +442,12 @@ class GPT(nn.Module):
         loss = None
         if targets is not None:
             # Cross-entropy at every position: how surprised the model was by the true next
-            # token, averaged. Plus the MoE aux loss (zero unless use_moe is on).
+            # token, averaged. Plus the MoE aux loss (zero unless use_moe is on). We upcast the
+            # logits to float32 first: under bfloat16 training (cfg.dtype) the softmax + log inside
+            # cross-entropy are the one spot where low precision bites, so we compute the loss in
+            # full precision while the rest of the network stays in bf16.
             loss = nn.losses.cross_entropy(
-                logits.reshape(-1, logits.shape[-1]),
+                logits.astype(mx.float32).reshape(-1, logits.shape[-1]),
                 targets.reshape(-1),
                 reduction="mean",
             )

@@ -12,3 +12,7 @@ ckpt_mm.json
 
 # downloadable training corpus (re-fetched by data.py)
 tinystories.txt
+
+# tokenized-corpus cache (memory-mapped by data.py; rebuilt from the corpus)
+*.tokens.bin
+*.tokens.json

@@ -18,6 +18,8 @@ import argparse
 import json
 
 import mlx.core as mx
+import mlx.nn as nn
+from mlx.utils import tree_flatten
 
 from config import Config
 from data import load_tokenizer
@@ -25,7 +27,28 @@ from model import GPT
 from sft import PROMPT_TEMPLATE, EOT      # instruction template + stop marker, for --chat mode
 
 
-def load_model(ckpt_path: str, meta_path: str):
+def _nbytes(model) -> int:
+    """Total bytes of all parameter arrays — used to show the quantization size win."""
+    return sum(p.nbytes for _, p in tree_flatten(model.parameters()))
+
+
+def quantize_model(model, bits: int, group_size: int):
+    """
+    Shrink the model to `bits`-bit weights in place with MLX's nn.quantize. Each weight matrix is
+    split into groups of `group_size` columns; each group is stored as small ints plus a scale
+    (and zero-point), so a 4-bit model is ~1/8 the size of float32 and decodes faster.
+
+    We only quantize Linear/Embedding layers whose last dimension divides evenly into the group
+    size — that skips tiny oddballs like the MoE router (which would error and isn't worth it).
+    The tied LM head comes along for free: it reuses the now-quantized token-embedding weight.
+    """
+    def can_quantize(_path, module):
+        return (isinstance(module, (nn.Linear, nn.Embedding))
+                and module.weight.shape[-1] % group_size == 0)
+    nn.quantize(model, group_size=group_size, bits=bits, class_predicate=can_quantize)
+
+
+def load_model(ckpt_path: str, meta_path: str, quantize: int = 0, q_group_size: int = 64):
     """Rebuild the tokenizer + model config from the JSON sidecar, then load the weights once."""
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
@@ -35,6 +58,13 @@ def load_model(ckpt_path: str, meta_path: str):
     cfg = Config(**meta["config"])
     model = GPT(cfg, vocab_size=tokenizer.vocab_size)
     model.load_weights(ckpt_path)
+    if quantize:
+        before = _nbytes(model)
+        quantize_model(model, bits=quantize, group_size=q_group_size)
+        mx.eval(model.parameters())
+        after = _nbytes(model)
+        print(f"quantized to {quantize}-bit (group {q_group_size}): "
+              f"{before/1e6:.1f}MB -> {after/1e6:.1f}MB ({before/after:.1f}x smaller)")
     model.eval()
     return model, tokenizer.encode, tokenizer.decode
 
@@ -132,11 +162,18 @@ def main():
     p.add_argument("--chat", action="store_true",
                    help="treat the prompt as an INSTRUCTION (wrap it in the SFT template and "
                         "stop at the end marker). Use with an SFT checkpoint from sft.py.")
+    p.add_argument("--quantize", type=int, default=0, choices=[0, 2, 3, 4, 6, 8],
+                   help="quantize weights to this many bits for smaller/faster inference "
+                        "(0 = off; try 4 or 8)")
+    p.add_argument("--q_group_size", type=int, default=64,
+                   help="quantization group size (columns sharing one scale); must divide the "
+                        "weight widths")
     p.add_argument("--ckpt", type=str, default="ckpt.npz")
     p.add_argument("--meta", type=str, default="ckpt.json")
     args = p.parse_args()
 
-    model, encode, decode = load_model(args.ckpt, args.meta)
+    model, encode, decode = load_model(args.ckpt, args.meta,
+                                       quantize=args.quantize, q_group_size=args.q_group_size)
     # Collect the sampling controls once; 0/off values become None so generate() skips them.
     gen_kwargs = dict(
         temperature=args.temperature,

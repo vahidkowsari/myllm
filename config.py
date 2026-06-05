@@ -47,6 +47,18 @@ class Config:
     # few channels (which makes the model easier to quantize) and is how "attention sinks" form.
     use_softmax1: bool = False
 
+    # --- scaling knobs (train a BIGGER model on the same laptop) ------------
+    # dtype: the precision weights and compute use. "float32" is the safe default; "bfloat16"
+    # halves memory and speeds up the matmuls, so you can fit/serve a model ~twice as big — at a
+    # small precision cost. We keep the loss in float32 regardless (see model.GPT.__call__). NOTE:
+    # this is a teaching simplification — production "mixed precision" also keeps a float32 master
+    # copy of the weights for the optimizer; here the bf16 weights ARE the master copy.
+    dtype: str = "float32"
+    # use_grad_checkpoint: recompute each block's activations during backprop instead of storing
+    # them (see model.GPT.__call__). Trades ~30% more compute for a big drop in memory — the lever
+    # that lets a deep model train without running out of room. No effect at inference.
+    use_grad_checkpoint: bool = False
+
     # --- mixture of experts (MoE) -------------------------------------------
     # When use_moe is True, each block's feed-forward becomes a SPARSE mixture of experts:
     # `n_experts` separate SwiGLU networks plus a tiny router that sends each token to its top
@@ -135,5 +147,27 @@ class Config:
     seed: int = 1337
 
 
-# A single shared instance the other files import.
+def medium() -> Config:
+    """
+    A scaled-up preset (~20-25M params vs. the ~2.7M default) for when you want the model to
+    actually get *good* rather than just demonstrate the mechanics. It leans on the two scaling
+    knobs above so it still fits a laptop: bfloat16 weights + gradient checkpointing. Expect
+    training to take much longer than the default ~7 min.
+
+    To use it, swap the last line of this file to `config = medium()` (or import and pass it
+    yourself), then run `python train.py`. block_size is bigger too, so the model sees more
+    context; with the BPE tokenizer (cfg.tokenizer="bpe") that reaches even further.
+    """
+    return Config(
+        n_embd=512, n_head=8, n_kv_head=4, n_layer=8,   # wider + deeper
+        block_size=256,                                  # longer context
+        dtype="bfloat16",                                # half-precision weights -> fits in memory
+        use_grad_checkpoint=True,                        # recompute activations -> fits in memory
+        use_qk_norm=True,                                # stability matters more at this scale
+        batch_size=32,                                   # bigger model -> smaller batch to fit
+        max_iters=20000, warmup_iters=400,               # more steps for the larger capacity
+    )
+
+
+# A single shared instance the other files import. Swap to `medium()` to train the big version.
 config = Config()

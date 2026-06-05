@@ -29,7 +29,7 @@ from functools import partial
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
-from mlx.utils import tree_flatten, tree_unflatten
+from mlx.utils import tree_flatten, tree_map, tree_unflatten
 
 from config import config
 from data import load_data, get_batch
@@ -77,8 +77,14 @@ def main():
 
     train_data, val_data, tokenizer = load_data()
     model = GPT(config, tokenizer.vocab_size)
+    # Optionally cast the whole model to bfloat16 (config.dtype). Done right after init, before the
+    # optimizer captures any state, so weights AND optimizer moments live in the chosen precision.
+    if config.dtype != "float32":
+        dt = getattr(mx, config.dtype)
+        model.update(tree_map(lambda p: p.astype(dt), model.parameters()))
     mx.eval(model.parameters())               # actually allocate/init the (lazy) weights
-    print(f"model parameters: {model.num_params()/1e6:.2f}M")
+    print(f"model parameters: {model.num_params()/1e6:.2f}M  (dtype={config.dtype}"
+          f"{', grad-checkpoint' if config.use_grad_checkpoint else ''})")
 
     # Learning-rate schedule: linearly WARM UP from 0 over the first `warmup_iters` steps (so
     # early, half-random gradients don't blow things up), then COSINE-DECAY down to `min_lr`

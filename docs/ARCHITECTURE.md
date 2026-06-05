@@ -115,6 +115,16 @@ in the corpus and gathers a `(batch_size, block_size)` grid of windows. The targ
 the input `x` shifted left by one: at every position `t`, the model must predict token `t+1`
 from tokens `0..t`. That single shift is the entire supervised signal.
 
+### Tokenized-corpus cache (memory-mapped)
+
+`load_tokens` tokenizes the whole corpus **once** and writes the ids to a binary blob
+(`<corpus>.<tokenizer>.tokens.bin`, uint16) plus a JSON sidecar, then returns a **`np.memmap`** of
+it. Memory-mapping means the ids stay on disk and the OS pages in only the windows `get_batch`
+actually samples — so a corpus larger than RAM still trains, and re-runs skip re-encoding. The
+cache is keyed by tokenizer + vocab size + corpus length and rebuilt automatically if any change.
+`get_batch` selects start positions with MLX's RNG (so `config.seed` still controls batching),
+gathers those windows from the memmap, and moves just that small batch onto the GPU as int32.
+
 ### Serialization
 
 Both tokenizers expose `to_meta()` (serialize) and `from_meta()` (rebuild), and
@@ -326,6 +336,22 @@ uniformly, so AdamW's built-in `weight_decay` is turned **off** and decay is app
 
 This is the "W" in AdamW, made selective.
 
+### Scaling up: precision & memory
+
+Two config knobs let a much bigger model train on the same laptop (`config.medium()` flips both on
+for a ~20-25M-param preset):
+
+- **`dtype="bfloat16"`.** Right after init the model is cast to bf16 (`tree_map(astype)`), so
+  weights *and* optimizer moments live in half precision — ~2× less memory and faster matmuls.
+  The one place low precision bites, the softmax/log inside the loss, is kept in float32 by
+  upcasting the logits in `GPT.__call__`. (Teaching simplification: real mixed precision also
+  keeps an fp32 *master* copy of the weights for the update; here the bf16 weights are the master.)
+- **`use_grad_checkpoint=True`.** Each block is wrapped in `nn.utils.checkpoint` during training,
+  which **discards the block's internal activations and recomputes them in the backward pass**.
+  That trades ~30% more compute for a large drop in peak memory — the lever that lets you go deeper
+  without running out of room. `nn.utils.checkpoint` (not bare `mx.checkpoint`) is used so
+  gradients still reach the block's *parameters*; it is a no-op at inference (no backward).
+
 ### Monitoring & checkpoint
 
 - `estimate_loss` averages the loss over `eval_iters` batches on both train and val splits every
@@ -368,9 +394,23 @@ Applied per step, in this order:
 | temperature | `--temperature` (0.8) | divides logits; <1 sharpens (more confident), >1 flattens (more random) |
 | top-k | `--top_k` (40, 0 = off) | keep only the `k` most likely tokens |
 | top-p (nucleus) | `--top_p` (0 = off) | keep the smallest set of tokens whose probabilities sum to `p`; adapts the candidate count per step |
+| quantize | `--quantize` (0 = off; 2/3/4/6/8) | n-bit weights for smaller/faster inference (see below); orthogonal to the sampling controls |
 
 Then a token is **sampled** (not argmaxed) from the surviving logits via
 `mx.random.categorical`, so output has variety.
+
+### Quantized inference (`--quantize`)
+
+`sample.py --quantize {2,3,4,6,8}` shrinks the weights *after* loading the float checkpoint, with
+MLX's `nn.quantize`. Each weight matrix is split into groups of `--q_group_size` (64) columns;
+each group is stored as small ints plus a scale, so a 4-bit model is ~1/6–1/8 the size of float32
+and decodes faster. A `class_predicate` quantizes only `Linear`/`Embedding` layers whose last
+dimension divides the group size (this skips tiny oddballs like the MoE router), and the **tied LM
+head comes along for free** — it reuses the now-`QuantizedEmbedding` weight via `as_linear`. To
+keep matrices quantization-friendly at any size, the SwiGLU hidden width is rounded up to a
+multiple of 64 (a no-op at the default `n_embd=192`, where it is already 512). On the default model
+4-bit is ~6.2× smaller (10.7 MB → 1.7 MB) and still writes coherent stories — and `use_softmax1`
+helps here, since the outlier activations it suppresses are exactly what make quantization lossy.
 
 ### Entropy-based ("entropix") sampling
 
@@ -461,6 +501,12 @@ story of LLM scaling in miniature.
 | `rope_base` | 10000.0 | RoPE frequency base (θ) |
 | `use_qk_norm` | False | RMSNorm Q and K per head before scoring (§3.3) — stability win |
 | `use_softmax1` | False | softmax-off-by-one: let attention rows sum to <1 (§3.3) |
+| `dtype` | "float32" | weight/compute precision; `"bfloat16"` ~halves memory to fit a bigger model (§4) |
+| `use_grad_checkpoint` | False | recompute block activations in backward to save memory (§4) |
+
+> **`config.medium()`** returns a ~20-25M-param preset (`n_embd=512`, `n_layer=8`, `block_size=256`,
+> bf16 + grad-checkpoint + QK-Norm). Swap the last line of `config.py` to `config = medium()` to
+> train it; expect it to take much longer than the default ~7 min.
 
 ### Mixture of experts
 

@@ -115,6 +115,14 @@ Everything is in `config.py`.
   KV cache.
 - **Mixture of experts.** Set `use_moe = True` (with `n_experts`, `n_experts_per_tok`) to make
   each block's feed-forward a sparse MoE.
+- **Attention tweaks (recent papers).** `use_qk_norm` (RMSNorm Q/K before scoring — training
+  stability) and `use_softmax1` (softmax-off-by-one, so a token can attend to "nothing").
+- **Scale it up.** `dtype = "bfloat16"` (half-precision weights) and `use_grad_checkpoint = True`
+  (recompute activations in backward) let a much bigger model fit on the laptop. `config.medium()`
+  is a ready ~20-25M-param preset that turns both on — swap the last line of `config.py` to
+  `config = medium()`. The tokenized corpus is cached to disk and memory-mapped, so it scales to
+  corpora bigger than RAM.
 
 Sampling controls (flags on `sample.py`): `--temperature`, `--top_k`, `--top_p` (nucleus),
-`--repetition_penalty`, `--tokens`.
+`--repetition_penalty`, `--tokens`, `--entropy` (adapt sampling to the model's own uncertainty),
+`--quantize 4`/`8` (n-bit weights — ~6× smaller, still coherent).
