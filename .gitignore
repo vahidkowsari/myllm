@@ -7,6 +7,8 @@ ckpt.npz
 ckpt.json
 ckpt_sft.npz
 ckpt_sft.json
+ckpt_mm.npz
+ckpt_mm.json
 
 # downloadable training corpus (re-fetched by data.py)
 tinystories.txt

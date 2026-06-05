@@ -34,6 +34,9 @@ python sft.py                        # post-train: instruction-tune the base ckp
 python sample.py --prompt "ROMEO:"   # one-shot generation from the base checkpoint
 python sample.py -i                  # interactive: load once, loop prompts, stream output
 python sample.py --chat --ckpt ckpt_sft.npz --meta ckpt_sft.json --prompt "Write a story about a cat."
+python vision.py                     # multimodal demo: show synthetic shape images + captions
+python train_mm.py                   # train the image->caption model -> ckpt_mm.npz + ckpt_mm.json
+python sample_mm.py --n 8            # caption fresh random shape images (rendered in the terminal)
 ```
 
 `sample.py` flags: `--prompt`, `--tokens`, `--temperature` (0.8), `--top_k` (40), `--top_p`
@@ -57,6 +60,9 @@ config. A reveal.js slide deck lives at `docs/presentation.html`.
 | `train.py`  | pretraining loop (`mx.compile`, warmup→cosine LR, masked weight decay), `estimate_loss`, save. |
 | `sft.py`    | post-training: instruction-tune the base ckpt with **loss-masked** (instruction,response) pairs synthesized from the corpus. |
 | `sample.py` | autoregressive generation (top-k/top-p/rep-penalty); `-i` REPL, `--chat` instruction mode. |
+| `vision.py` | **multimodal demo.** synthetic colored-shape images + `PatchEmbed` (image→vectors) + `CaptionModel` (PatchEmbed + the *unmodified* GPT) + an ANSI-color terminal previewer. |
+| `train_mm.py`| train `vision.CaptionModel` image→caption from scratch with loss-masked captions (same masking idea as `sft.py`). |
+| `sample_mm.py`| caption fresh random images from `ckpt_mm.*`, rendered in the terminal. |
 | `config.py` | single `Config` dataclass with every hyperparameter, commented. |
 
 ## Conventions / things to preserve
@@ -72,6 +78,12 @@ config. A reveal.js slide deck lives at `docs/presentation.html`.
   `sample.py` can rebuild the tokenizer and model shape without re-reading the corpus. Tokenizers
   expose `to_meta()` / `from_meta()`; `data.load_tokenizer()` dispatches on the saved `type`.
   Preserve that contract if you touch save/load.
+- **Multimodality is one hook, on purpose.** `GPT.__call__` takes an optional `prefix` of
+  pre-embedded `(B, T_prefix, C)` vectors that are concatenated in front of the text vectors —
+  the model is deliberately *source-agnostic* about where vectors come from. The vision demo
+  produces that prefix from image patches (`vision.PatchEmbed`); **do not** push image-specific
+  logic into `model.py`. Don't combine `prefix` with `targets` in one call — multimodal loss is
+  computed by the caller (`train_mm.caption_loss`), masked to caption tokens.
 - The output LM head is **tied** to `token_emb` via `token_emb.as_linear(x)` in `GPT.__call__`
   (MLX's weight-tying idiom) — there is deliberately no separate `lm_head` weight to keep in sync.
 - Defaults give a **~2.7M-param** model. If you change `n_embd`/`n_layer`/`n_head`, update the

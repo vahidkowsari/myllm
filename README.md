@@ -67,6 +67,24 @@ python sample.py -i
 > It's a *character-level Shakespeare continuer*, not a chatbot — give it the start of a line
 > and it keeps writing in that style.
 
+## Bonus: a multimodal (image → text) demo
+
+The same GPT can *see*. A transformer doesn't really process text — it processes a sequence of
+vectors, and the only thing that turns text into those vectors is one embedding line. So to go
+multimodal you just build a second converter that turns an image into the same kind of vectors
+and splice them into the sequence; attention does the rest.
+
+```bash
+python vision.py        # peek at the toy dataset: colored shapes drawn + captioned in your terminal
+python train_mm.py      # train an image->caption model from scratch (~2 min); captions fresh images
+python sample_mm.py --n 8   # caption 8 brand-new random images
+```
+
+`vision.py` chops each image into patches, projects each patch to one model vector (`PatchEmbed`,
+the image analogue of the token embedding), and prepends them to the text via GPT's `prefix=`
+hook. Loss is graded only on the caption characters — the same masking trick as SFT. See the long
+comment at the top of `vision.py`.
+
 ## Files
 
 | file        | what it is |
@@ -77,6 +95,9 @@ python sample.py -i
 | `train.py`  | the pretraining loop (`mx.compile`, warmup→cosine LR, weight decay) + loss reporting |
 | `sft.py`    | post-training: instruction-tune the base model on loss-masked (instruction, response) pairs |
 | `sample.py` | autoregressive generation (`-i` = interactive REPL, `--chat` = instruction mode) |
+| `vision.py` | multimodal demo: synthetic shape images, `PatchEmbed` (image→vectors), and the captioning model |
+| `train_mm.py`| trains the image→caption model from scratch (loss-masked captions, like SFT) |
+| `sample_mm.py`| captions fresh random images, drawn in color in the terminal |
 | `config.py` | one place for all hyperparameters (model size, lr, tokenizer, MoE/GQA toggles, etc.) |
 
 ## Knobs to play with

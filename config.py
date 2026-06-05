@@ -84,6 +84,23 @@ class Config:
     sft_warmup_iters: int = 50
     sft_max_pairs: int = 5000               # how many stories to turn into instruction pairs
 
+    # --- multimodal vision demo (vision.py / train_mm.py / sample_mm.py) -----
+    # A tiny IMAGE -> TEXT captioning demo bolted onto the SAME GPT. Images of simple colored
+    # shapes are chopped into square PATCHES; each patch is projected to an n_embd vector
+    # (PatchEmbed, the image analogue of the token embedding) and PREPENDED to the text tokens so
+    # the transformer attends to image and text in ONE shared sequence. Loss is graded only on the
+    # caption tokens — the exact same masking idea SFT uses. This is the whole "multimodal LLM"
+    # trick in miniature: the blocks don't know some of their input vectors came from pixels.
+    img_size: int = 24          # square image side in pixels (must be divisible by patch_size)
+    patch_size: int = 8         # side of each square patch; (img_size/patch_size)^2 = #image "tokens"
+    img_channels: int = 3       # RGB, so the shape's COLOR is visible to the model
+    caption_len: int = 40       # fixed text length (chars) per example; the captions are short
+    vision_ckpt_path: str = "ckpt_mm.npz"   # weights for the captioning model (GPT + PatchEmbed)
+    vision_meta_path: str = "ckpt_mm.json"  # tokenizer + config sidecar, like the other ckpts
+    vision_lr: float = 3e-4
+    vision_iters: int = 1500    # the shape task is easy; this trains from scratch in ~2 min
+    vision_warmup_iters: int = 50
+
     # --- bookkeeping ---------------------------------------------------------
     data_path: str = "tinystories.txt"  # raw training text
     # MLX saves model weights to a .npz; the tokenizer vocab + this config go in a

@@ -350,17 +350,33 @@ class GPT(nn.Module):
         from mlx.utils import tree_flatten
         return sum(p.size for _, p in tree_flatten(self.parameters()))
 
-    def __call__(self, idx, targets=None, caches=None):
+    def __call__(self, idx, targets=None, caches=None, prefix=None):
         """
         idx     : (B, T) token ids.
         targets : (B, T) the next-token ids, or None at generation time.
         caches  : optional list of per-block (k, v) caches; None during training.
+        prefix  : optional (B, T_prefix, C) block of vectors from ANOTHER modality (e.g. image
+                  patches; see vision.py), glued on in front of the text vectors. This is the
+                  multimodal hook — see the comment below.
         Returns (logits, loss, new_caches). loss is None if targets is None.
         """
         B, T = idx.shape
-        assert T <= self.block_size, f"sequence length {T} exceeds block_size {self.block_size}"
+        T_prefix = 0 if prefix is None else prefix.shape[1]
+        assert T + T_prefix <= self.block_size, \
+            f"sequence length {T + T_prefix} exceeds block_size {self.block_size}"
 
-        x = self.drop(self.token_emb(idx))                 # (B, T, C) — position comes from RoPE
+        x = self.token_emb(idx)                            # (B, T, C) — position comes from RoPE
+        if prefix is not None:
+            # THE MULTIMODAL HOOK. `prefix` is a block of (B, T_prefix, C) vectors produced by some
+            # OTHER modality and simply concatenated in front of the text vectors. The blocks below
+            # can't tell the difference: to them it is all just a sequence of C-dim vectors, and
+            # attention lets the text positions look at these extra vectors exactly as they look at
+            # each other. That source-agnostic property is the entire reason a transformer can be
+            # made multimodal — nothing inside attention changes. (Used at training / prefill; the
+            # loss for these prefix positions is handled by the caller, so don't combine `prefix`
+            # with `targets` here.)
+            x = mx.concatenate([prefix, x], axis=1)        # (B, T_prefix + T, C)
+        x = self.drop(x)
 
         if caches is None:                                 # training / first step: empty caches
             caches = [None] * len(self.blocks)
